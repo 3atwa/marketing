@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}{{ camp.name }} · LeadForge{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ camp.name }}</h1>
+    <p class="muted">{{ camp.targets }} · {{ camp.locations.replace('\n', ' · ') }} · sources: {{ camp.sources|join(', ') }}</p>
+  </div>
+  <div class="actions">
+    <span class="badge {{ camp.status }}" id="status">{{ camp.status }}</span>
+    <form method="post" action="/campaigns/{{ camp.id }}/run"><button class="secondary" {% if camp.status == 'running' %}disabled{% endif %}>↻ Run again</button></form>
+    <a class="button secondary" href="/campaigns/{{ camp.id }}/export.csv?{{ request.query_params }}">⬇ Export CSV</a>
+    <form method="post" action="/campaigns/{{ camp.id }}/delete" onsubmit="return confirm('Delete campaign and all its leads?')"><button class="danger">Delete</button></form>
+  </div>
+</div>
+
+<details class="card log" {% if camp.status in ['running','failed'] %}open{% endif %}>
+  <summary>Activity log: <span id="progress">{{ camp.progress }}</span></summary>
+  <pre>{{ camp.log }}</pre>
+</details>
+
+<form method="get" class="filters">
+  <input name="q" placeholder="Search name, email, city…" value="{{ params.q or '' }}">
+  <label class="check"><input type="checkbox" name="has_email" value="1" {% if params.has_email %}checked{% endif %}> has email</label>
+  <label class="check"><input type="checkbox" name="has_phone" value="1" {% if params.has_phone %}checked{% endif %}> has phone</label>
+  <select name="status"><option value="">any status</option>{% for s in LEAD_STATUSES %}<option {% if params.status == s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select>
+  <input type="number" name="min_score" placeholder="min score" value="{{ params.min_score or '' }}" style="width:7em">
+  <button class="secondary">Filter</button>
+</form>
+
+<form method="post" action="/campaigns/{{ camp.id }}/bulk">
+  <div class="bulkbar">
+    <strong>{{ leads|length }} leads</strong>
+    <span class="spacer"></span>
+    <select name="template_id">{% for t in tpls %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}</select>
+    <label class="check" title="Requires ANTHROPIC_API_KEY"><input type="checkbox" name="use_ai" value="1" {% if not settings.ai_enabled %}disabled{% endif %}> AI personalise</label>
+    <button name="action" value="draft">✉ Draft emails for selected</button>
+    <select name="bulk_action" onchange="if(this.value) this.form.requestSubmit ? this.form.requestSubmit() : this.form.submit()">
+      <option value="">More actions…</option>
+      <option value="enrich">Re-crawl websites</option>
+      {% for s in LEAD_STATUSES %}<option value="{{ s }}">Mark: {{ s }}</option>{% endfor %}
+      <option value="delete">Delete</option>
+    </select>
+  </div>
+  <div class="table-wrap">
+  <table class="leads">
+    <thead><tr>
+      <th><input type="checkbox" data-select-all></th><th>Score</th><th>Business</th><th>Email</th><th>Phone</th>
+      <th>Website / social</th><th>Location</th><th>Signals</th><th>Status</th>
+    </tr></thead>
+    <tbody>
+    {% for l in leads %}
+      <tr>
+        <td><input type="checkbox" name="lead_ids" value="{{ l.id }}"></td>
+        <td><span class="score s{{ (l.score // 25) }}">{{ l.score }}</span></td>
+        <td><a href="/leads/{{ l.id }}"><strong>{{ l.name }}</strong></a><br><small class="muted">{{ l.category }}{% if l.rating %} · ★ {{ l.rating }} ({{ l.review_count }}){% endif %}</small></td>
+        <td>{% for e in l.emails[:2] %}<a href="mailto:{{ e }}">{{ e }}</a><br>{% else %}<span class="muted">–</span>{% endfor %}</td>
+        <td>{% for p in l.phones[:2] %}<a href="{{ tel_link(p) }}">{{ p }}</a>{% if whatsapp_link(p, '') %} <a href="{{ whatsapp_link(p, '') }}" target="_blank" title="WhatsApp">💬</a>{% endif %}<br>{% else %}<span class="muted">–</span>{% endfor %}</td>
+        <td>{% if l.website %}<a href="{{ l.website }}" target="_blank" rel="noopener">{{ l.website.split('//')[-1][:30] }}</a><br>{% endif %}
+            {% for k, v in l.socials.items() %}<a href="{{ v }}" target="_blank" rel="noopener" class="tag">{{ k }}</a>{% endfor %}</td>
+        <td class="clip">{{ l.address or l.city }}</td>
+        <td>{% for s in l.signals[:3] %}<span class="tag warn">{{ s }}</span>{% endfor %}</td>
+        <td><span class="badge {{ l.status }}">{{ l.status }}</span></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="9" class="muted center">{% if camp.status == 'running' %}Searching… leads will appear here.{% else %}No leads match.{% endif %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</form>
+{% endblock %}
+{% block scripts %}
+{% if camp.status == 'running' %}
+<script>
+  let last = -1;
+  setInterval(async () => {
+    const r = await fetch('/campaigns/{{ camp.id }}/status'); const s = await r.json();
+    document.getElementById('progress').textContent = s.progress;
+    document.getElementById('status').textContent = s.status;
+    if (s.status !== 'running' || (last >= 0 && s.leads !== last && s.leads % 25 === 0)) location.reload();
+    last = s.leads;
+  }, 4000);
+</script>
+{% endif %}
+{% endblock %}

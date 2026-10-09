@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}LeadForge{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">⚡ LeadForge</a>
+    <nav>
+      <a href="/">Campaigns</a>
+      <a href="/outbox">Outbox</a>
+      <a href="/templates">Templates</a>
+      <a href="/settings">Settings</a>
+    </nav>
+  </header>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+  <script>
+    // Select-all checkbox for lead tables
+    document.addEventListener('change', (e) => {
+      if (e.target.matches('[data-select-all]')) {
+        document.querySelectorAll('input[name=lead_ids]').forEach(cb => cb.checked = e.target.checked);
+      }
+    });
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

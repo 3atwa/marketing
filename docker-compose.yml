@@ -1,0 +1,22 @@
+services:
+  leadforge:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+  # Optional: Google Maps source (https://github.com/gosom/google-maps-scraper, MIT).
+  # Start with:  docker compose --profile gmaps up -d
+  # and set GMAPS_SCRAPER_URL=http://gmaps:8080 in .env
+  gmaps:
+    image: gosom/google-maps-scraper
+    profiles: ["gmaps"]
+    command: ["-data-folder", "/gmapsdata"]
+    volumes:
+      - ./gmapsdata:/gmapsdata
+    ports:
+      - "8080:8080"
+    restart: unless-stopped

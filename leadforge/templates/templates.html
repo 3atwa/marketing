@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Templates · LeadForge{% endblock %}
+{% block content %}
+<h1>Email templates</h1>
+<p class="muted">Placeholders: <code>{{ '{{business_name}}' }}</code> <code>{{ '{{category}}' }}</code> <code>{{ '{{category_plural}}' }}</code>
+  <code>{{ '{{city}}' }}</code> <code>{{ '{{website}}' }}</code> <code>{{ '{{rating}}' }}</code> <code>{{ '{{services}}' }}</code>
+  <code>{{ '{{signal_line}}' }}</code> (a sentence based on what we noticed on their website), <code>{{ '{{my_name}}' }}</code> <code>{{ '{{my_company}}' }}</code>.
+  Jinja expressions such as <code>{{ "{{ ' in ' + city if city else '' }}" }}</code> also work.</p>
+
+{% for t in tpls + [{'id': 0, 'name': '', 'subject': '', 'body': ''}] %}
+<section class="card">
+  <h2>{{ t.name or 'New template' }}</h2>
+  <form method="post" action="/templates">
+    <input type="hidden" name="tid" value="{{ t.id }}">
+    <label>Name <input name="name" value="{{ t.name }}" required></label>
+    <label>Subject <input name="subject" value="{{ t.subject }}" required></label>
+    <label>Body <textarea name="body" rows="10" required>{{ t.body }}</textarea></label>
+    <div class="actions">
+      <button name="action" value="save">Save</button>
+      {% if t.id %}<button name="action" value="delete" class="danger" formnovalidate onclick="return confirm('Delete template?')">Delete</button>{% endif %}
+    </div>
+  </form>
+</section>
+{% endfor %}
+{% endblock %}

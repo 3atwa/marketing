@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Settings · LeadForge{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+<p class="muted">Settings are read from environment variables / the <code>.env</code> file. Edit it and restart the app.</p>
+
+<section class="card">
+  <h2>Lead sources</h2>
+  <table>
+    {% for key, label, ok in sources %}
+      <tr><td>{{ label }}</td><td>{% if ok %}<span class="badge done">enabled</span>{% else %}<span class="badge failed">not configured</span>{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+</section>
+
+<section class="card">
+  <h2>Outreach</h2>
+  <table>
+    <tr><td>SMTP sending</td><td>{% if settings.smtp_configured %}<span class="badge done">{{ settings.smtp_host }} as {{ settings.from_email }}</span>{% else %}<span class="badge failed">not configured</span>: drafts open in your own mail app{% endif %}</td></tr>
+    <tr><td>Daily send limit / delay</td><td>{{ settings.daily_send_limit }} per day, {{ settings.send_delay_seconds }}s between emails</td></tr>
+    <tr><td>Sender postal address (legally required in many countries)</td><td>{{ settings.sender_address or '⚠ not set (SENDER_POSTAL_ADDRESS)' }}</td></tr>
+    <tr><td>Unsubscribe links point to</td><td>{{ settings.public_base_url }}/unsubscribe</td></tr>
+    <tr><td>AI personalisation (Claude)</td><td>{% if settings.ai_enabled %}<span class="badge done">{{ settings.anthropic_model }}</span>{% else %}<span class="badge failed">off</span>: set ANTHROPIC_API_KEY{% endif %}</td></tr>
+    <tr><td>Respect robots.txt</td><td>{{ settings.respect_robots }}</td></tr>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Do-not-contact list</h2>
+  <form method="post" action="/suppression" class="actions">
+    <input name="email" type="email" placeholder="email@example.com" required>
+    <button>Add</button>
+  </form>
+  <table>
+    {% for s in suppressed %}<tr><td>{{ s.email }}</td><td class="muted">{{ s.reason }}</td><td class="muted">{{ s.created_at[:10] }}</td></tr>{% endfor %}
+  </table>
+</section>
+{% endblock %}

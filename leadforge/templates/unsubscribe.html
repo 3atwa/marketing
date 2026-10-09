@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unsubscribe</title><link rel="stylesheet" href="/static/style.css"></head>
+<body><main class="container narrow">
+  <section class="card center">
+    {% if done %}
+      <h1>You're unsubscribed</h1>
+      <p>{{ email }} won't receive any more emails from us. Sorry for the interruption.</p>
+    {% elif valid %}
+      <h1>Unsubscribe</h1>
+      <p>Stop all emails to <strong>{{ email }}</strong>?</p>
+      <form method="post" action="/unsubscribe">
+        <input type="hidden" name="e" value="{{ email }}"><input type="hidden" name="t" value="{{ token }}">
+        <button>Unsubscribe</button>
+      </form>
+    {% else %}
+      <h1>Invalid link</h1>
+      <p>This unsubscribe link is not valid. Reply to the email with "unsubscribe" and we'll remove you.</p>
+    {% endif %}
+  </section>
+</main></body></html>

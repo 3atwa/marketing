@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block content %}
+{% if totals %}
+<section class="stats">
+  <div class="stat"><span>{{ totals.leads or 0 }}</span>Leads found</div>
+  <div class="stat"><span>{{ totals.emails or 0 }}</span>With email</div>
+  <div class="stat"><span>{{ totals.phones or 0 }}</span>With phone</div>
+  <div class="stat"><span>{{ sent or 0 }}</span>Messages sent</div>
+  <div class="stat"><span>{{ totals.warm or 0 }}</span>Warm leads</div>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>New lead campaign</h2>
+  <p class="muted">Describe what you sell, pick the kinds of businesses and where they are. LeadForge finds them, visits their websites and collects emails, phones, socials and addresses.</p>
+  <form method="post" action="/campaigns" class="grid-form">
+    <label class="full">What do you sell? (your apps / services)
+      <textarea name="services" rows="3" placeholder="e.g. A booking & reminder app with WhatsApp notifications for salons and clinics">{{ form.services or '' }}</textarea>
+    </label>
+    <label class="full">Target business types <small>(comma separated: leave empty and click "Suggest" to fill it in)</small>
+      <input name="targets" value="{{ form.targets or '' }}" placeholder="dentist, hair salon, gym">
+    </label>
+    {% if suggested %}<p class="full hint">Suggested from your services: {{ suggested|join(', ') }}. Edit as you like.</p>{% endif %}
+    <label>Locations <small>(one per line)</small>
+      <textarea name="locations" rows="3" placeholder="Austin, Texas&#10;Dubai, UAE">{{ form.locations or '' }}</textarea>
+    </label>
+    <div>
+      <label>Campaign name <small>(optional)</small>
+        <input name="name" value="{{ form.name or '' }}">
+      </label>
+      <label>Max results per search
+        <input type="number" name="max_per_query" min="5" max="200" value="{{ form.max_per_query or 40 }}">
+      </label>
+    </div>
+    <fieldset class="full">
+      <legend>Sources</legend>
+      {% for key, label, ok in sources %}
+        <label class="check {% if not ok %}disabled{% endif %}">
+          <input type="checkbox" name="sources" value="{{ key }}" {% if ok and key in ['osm','web','google_places','gmaps_scraper'] %}checked{% endif %} {% if not ok %}disabled{% endif %}>
+          {{ label }}
+        </label>
+      {% endfor %}
+    </fieldset>
+    <div class="full actions">
+      <button type="submit" formaction="/suggest" class="secondary">✨ Suggest business types</button>
+      <button type="submit">🚀 Find leads</button>
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Campaigns</h2>
+  {% if not campaigns %}<p class="muted">No campaigns yet.</p>{% else %}
+  <table>
+    <thead><tr><th>Name</th><th>Targets</th><th>Status</th><th>Leads</th><th>Email</th><th>Phone</th><th>Created</th></tr></thead>
+    <tbody>
+    {% for c in campaigns %}
+      <tr>
+        <td><a href="/campaigns/{{ c.id }}">{{ c.name }}</a></td>
+        <td class="clip">{{ c.targets }}</td>
+        <td><span class="badge {{ c.status }}">{{ c.status }}</span></td>
+        <td>{{ c.lead_count or 0 }}</td><td>{{ c.email_count or 0 }}</td><td>{{ c.phone_count or 0 }}</td>
+        <td class="muted">{{ c.created_at[:16].replace('T',' ') }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Outbox · LeadForge{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Outbox</h1>
+    <p class="muted">Review drafts, queue them, then send. Sent today: {{ sent_today }} / {{ settings.daily_send_limit }} ·
+      {% if settings.smtp_configured %}SMTP ready ({{ settings.from_email }}){% else %}<strong>SMTP not configured</strong>: use the ✉ buttons to send from your own mail app{% endif %}</p>
+  </div>
+  <div class="actions">
+    <form method="post" action="/outbox/queue-all"><button class="secondary">Queue all drafts</button></form>
+    <form method="post" action="/outbox/send"><button {% if not settings.smtp_configured %}disabled{% endif %}>▶ Send queued</button></form>
+  </div>
+</div>
+{% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+
+<nav class="tabs">
+  <a href="/outbox" class="{% if not status %}active{% endif %}">All</a>
+  {% for s in ['draft','queued','sent','failed','skipped'] %}
+    <a href="/outbox?status={{ s }}" class="{% if status == s %}active{% endif %}">{{ s }} ({{ counts.get(s, 0) }})</a>
+  {% endfor %}
+</nav>
+
+{% for m in msgs %}
+<details class="card msg-card" {% if m.status in ['draft','failed'] and loop.index <= 3 %}open{% endif %}>
+  <summary><span class="badge {{ m.status }}">{{ m.status }}</span> <strong>{{ m.lead_name }}</strong> &lt;{{ m.recipient }}&gt;: {{ m.subject }}</summary>
+  {% if m.error %}<div class="error">{{ m.error }}</div>{% endif %}
+  <form method="post" action="/messages/{{ m.id }}">
+    <label>Subject <input name="subject" value="{{ m.subject }}" {% if m.status not in ['draft','failed'] %}readonly{% endif %}></label>
+    <label>Body <textarea name="body" rows="9" {% if m.status not in ['draft','failed'] %}readonly{% endif %}>{{ m.body }}</textarea></label>
+    <p class="muted small">{% if settings.sender_address %}Your postal address and an unsubscribe link are{% else %}An unsubscribe link is{% endif %} added automatically when sent via SMTP.</p>
+    <div class="actions wrap">
+      {% if m.status in ['draft','failed'] %}
+        <button name="action" value="save" class="secondary">Save</button>
+        <button name="action" value="queue">Queue</button>
+      {% endif %}
+      <a class="button secondary" href="{{ mailto_link(m.recipient, m.subject, m.body) }}">✉ Open in mail app</a>
+      <a class="button secondary" href="/leads/{{ m.lead_id }}">Lead</a>
+      {% if m.status != 'sent' %}<button name="action" value="delete" class="danger">Delete</button>{% endif %}
+    </div>
+  </form>
+</details>
+{% else %}
+<p class="muted">Nothing here. Select leads in a campaign and click "Draft emails".</p>
+{% endfor %}
+{% endblock %}

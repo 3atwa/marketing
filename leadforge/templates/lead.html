@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}{{ lead.name }} · LeadForge{% endblock %}
+{% block content %}
+<p><a href="/campaigns/{{ camp.id }}">← {{ camp.name }}</a></p>
+<div class="page-head">
+  <div>
+    <h1>{{ lead.name }}</h1>
+    <p class="muted">{{ lead.category }} · {{ lead.address or lead.city }} · score {{ lead.score }} · source {{ lead.source }}</p>
+  </div>
+  <span class="badge {{ lead.status }}">{{ lead.status }}</span>
+</div>
+
+<div class="two-col">
+  <section class="card">
+    <h2>Reach out</h2>
+    {% set email = lead.emails[0] if lead.emails else '' %}
+    {% set phone = lead.phones[0] if lead.phones else '' %}
+    <label>Subject <input id="subj" value="{{ subject }}"></label>
+    <label>Message <textarea id="body" rows="12">{{ body }}</textarea></label>
+    <div class="actions wrap">
+      {% if email %}<a class="button" id="mailto" href="{{ mailto_link(email, subject, body) }}">✉ Open in email app</a>{% endif %}
+      {% if phone and whatsapp_link(phone, body) %}<a class="button whatsapp" id="wa" target="_blank" href="{{ whatsapp_link(phone, body) }}">💬 WhatsApp</a>{% endif %}
+      {% if phone %}<a class="button secondary" href="{{ tel_link(phone) }}">📞 Call {{ phone }}</a>{% endif %}
+      <button class="secondary" onclick="navigator.clipboard.writeText(document.getElementById('body').value)">Copy text</button>
+    </div>
+    <form method="post" action="/leads/{{ lead.id }}/log" class="actions wrap" style="margin-top:1rem">
+      <input type="hidden" name="body" id="logbody" value="">
+      <span class="muted">Log a manual contact:</span>
+      <button class="secondary" name="channel" value="whatsapp" onclick="document.getElementById('logbody').value=document.getElementById('body').value">WhatsApp sent</button>
+      <button class="secondary" name="channel" value="call">Called</button>
+      <button class="secondary" name="channel" value="email" onclick="document.getElementById('logbody').value=document.getElementById('body').value">Emailed manually</button>
+    </form>
+    {% if lead.signals %}
+      <h3>Signals</h3>
+      <p>{% for s in lead.signals %}<span class="tag warn">{{ s }}</span>{% endfor %}</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Details</h2>
+    <form method="post" action="/leads/{{ lead.id }}">
+      <label>Name <input name="name" value="{{ lead.name }}"></label>
+      <label>Website <input name="website" value="{{ lead.website }}"></label>
+      <label>Emails <small>(comma separated)</small> <input name="emails" value="{{ lead.emails|join(', ') }}"></label>
+      <label>Phones <input name="phones" value="{{ lead.phones|join(', ') }}"></label>
+      <label>Address <input name="address" value="{{ lead.address }}"></label>
+      <label>Status <select name="status">{% for s in LEAD_STATUSES %}<option {% if lead.status == s %}selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
+      <label>Notes <textarea name="notes" rows="4">{{ lead.notes }}</textarea></label>
+      <button>Save</button>
+    </form>
+    {% if lead.socials %}<h3>Social</h3><p>{% for k, v in lead.socials.items() %}<a class="tag" href="{{ v }}" target="_blank" rel="noopener">{{ k }}</a>{% endfor %}</p>{% endif %}
+    {% if lead.lat %}<p><a target="_blank" rel="noopener" href="https://www.openstreetmap.org/?mlat={{ lead.lat }}&mlon={{ lead.lon }}#map=18/{{ lead.lat }}/{{ lead.lon }}">📍 View on map</a></p>{% endif %}
+  </section>
+</div>
+
+<section class="card">
+  <h2>History</h2>
+  {% if not msgs %}<p class="muted">No contact yet.</p>{% endif %}
+  {% for m in msgs %}
+    <div class="msg"><span class="badge {{ m.status }}">{{ m.status }}</span> <strong>{{ m.channel }}</strong> {{ m.subject }} <small class="muted">{{ (m.sent_at or m.created_at)[:16].replace('T',' ') }}</small>
+      {% if m.error %}<div class="error">{{ m.error }}</div>{% endif %}</div>
+  {% endfor %}
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+  // Keep the mailto / WhatsApp links in sync with edits.
+  const email = {{ (lead.emails[0] if lead.emails else '')|tojson }};
+  const phone = {{ ((lead.phones[0] if lead.phones else '')|replace(' ', '')|replace('+', '')|replace('-', '')|replace('(', '')|replace(')', ''))|tojson }};
+  function sync() {
+    const s = document.getElementById('subj').value, b = document.getElementById('body').value;
+    const m = document.getElementById('mailto'); if (m) m.href = `mailto:${email}?subject=${encodeURIComponent(s)}&body=${encodeURIComponent(b)}`;
+    const w = document.getElementById('wa'); if (w) w.href = `https://wa.me/${phone}?text=${encodeURIComponent(b)}`;
+  }
+  document.getElementById('subj').addEventListener('input', sync);
+  document.getElementById('body').addEventListener('input', sync);
+</script>
+{% endblock %}
