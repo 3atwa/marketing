@@ -36,7 +36,7 @@ def test_dashboard_and_campaign_flow(monkeypatch):
         csv_text = client.get(f"/campaigns/{cid}/export.csv").text
         assert "info@smileco.com" in csv_text
 
-        tid = db.fetch_one("SELECT id FROM templates ORDER BY id")["id"]
+        tid = db.fetch_one("SELECT id FROM templates WHERE name LIKE 'Intro%'")["id"]
         r = client.post(f"/campaigns/{cid}/bulk", data={"lead_ids": [str(lid)], "template_id": str(tid),
                                                         "action": "draft", "bulk_action": ""}, follow_redirects=False)
         assert r.status_code == 303

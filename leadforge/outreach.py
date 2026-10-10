@@ -42,6 +42,8 @@ SIGNAL_LINES = {
 
 def signal_line(signals: list[str]) -> str:
     for s in signals or []:
+        if s.startswith("Domain is parked"):
+            return "I noticed your web address currently shows a 'parked domain' placeholder instead of your business."
         if s.startswith("Website looks outdated"):
             return "It looks like your website hasn't been updated in a while."
         line = SIGNAL_LINES.get(s)
@@ -62,7 +64,15 @@ def context_for(lead: dict, services: str) -> dict:
         "signal_line": signal_line(lead.get("signals") or []),
         "my_name": settings.from_name,
         "my_company": settings.sender_company,
+        "calendar_url": settings.calendar_url,
+        "report_link": report_link(lead),
     }
+
+
+def report_link(lead: dict) -> str:
+    from .automation import report_url
+
+    return report_url(lead["id"]) if lead.get("id") else ""
 
 
 def render(template: str, ctx: dict) -> str:
@@ -107,7 +117,7 @@ async def create_drafts(lead_ids: list[int], template_id: int, services: str, us
     sender = " / ".join(filter(None, [settings.from_name, settings.sender_company]))
     for lead_id in lead_ids:
         lead = db.fetch_one("SELECT * FROM leads WHERE id = ?", (lead_id,))
-        if not lead or lead["status"] == "do_not_contact" or not lead["emails"]:
+        if not lead or lead["status"] == "do_not_contact" or not lead["emails"] or lead.get("email_status") == "invalid":
             stats["skipped"] += 1
             continue
         email = lead["emails"][0]
@@ -136,13 +146,21 @@ def sent_today() -> int:
     return row["n"] if row else 0
 
 
-def _send_one(msg_row: dict) -> None:
+def _send_one(msg_row: dict) -> str:
+    """Send one email; returns its Message-ID (used to match replies)."""
     email = msg_row["recipient"]
     msg = EmailMessage()
     msg["From"] = formataddr((settings.from_name or settings.sender_company, settings.from_email))
     msg["To"] = email
     msg["Subject"] = msg_row["subject"]
-    msg["Message-ID"] = make_msgid(domain=settings.from_email.split("@")[-1])
+    message_id = make_msgid(domain=settings.from_email.split("@")[-1])
+    msg["Message-ID"] = message_id
+    # Thread follow-ups under the previous email so they read as one conversation.
+    prev = db.fetch_one("SELECT message_id FROM messages WHERE lead_id = ? AND status = 'sent' AND message_id != '' "
+                        "ORDER BY id DESC LIMIT 1", (msg_row["lead_id"],))
+    if prev:
+        msg["In-Reply-To"] = prev["message_id"]
+        msg["References"] = prev["message_id"]
     msg["List-Unsubscribe"] = f"<{unsubscribe_url(email)}>, <mailto:{settings.from_email}?subject=unsubscribe>"
     msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
     msg.set_content(msg_row["body"] + footer(email))
@@ -151,11 +169,13 @@ def _send_one(msg_row: dict) -> None:
         server = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, context=ssl.create_default_context(), timeout=30)
     else:
         server = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30)
-        server.starttls(context=ssl.create_default_context())
+        if settings.smtp_starttls:
+            server.starttls(context=ssl.create_default_context())
     with server:
         if settings.smtp_user:
             server.login(settings.smtp_user, settings.smtp_password)
         server.send_message(msg)
+    return message_id
 
 
 _sending = False
@@ -179,12 +199,15 @@ async def send_queued(log=print) -> dict:
             if not row:
                 break
             lead = db.fetch_one("SELECT status FROM leads WHERE id = ?", (row["lead_id"],))
-            if db.is_suppressed(row["recipient"]) or (lead and lead["status"] == "do_not_contact"):
+            if db.is_suppressed(row["recipient"]) or (lead and lead["status"] == "do_not_contact") or \
+                    (row.get("enrollment_id") and lead and lead["status"] in ("replied", "interested", "won", "lost")):
                 db.execute("UPDATE messages SET status='skipped', error='unsubscribed' WHERE id=?", (row["id"],))
                 continue
             try:
-                await asyncio.to_thread(_send_one, row)
-                db.execute("UPDATE messages SET status='sent', sent_at=? WHERE id=?", (db.now(), row["id"]))
+                message_id = await asyncio.to_thread(_send_one, row)
+                db.execute("UPDATE messages SET status='sent', sent_at=?, message_id=? WHERE id=?",
+                           (db.now(), message_id, row["id"]))
+                db.log_event(row["lead_id"], "email_sent", row["subject"])
                 db.execute("UPDATE leads SET status='contacted' WHERE id=? AND status='new'", (row["lead_id"],))
                 stats["sent"] += 1
             except Exception as exc:

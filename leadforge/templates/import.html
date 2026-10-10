@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Import · LeadForge{% endblock %}
+{% block content %}
+<h1>Import leads from CSV</h1>
+<p class="muted">Bring your own lists (exports from Google Maps tools, LinkedIn, events, old CRMs). LeadForge maps the columns,
+  removes duplicates and can crawl each website for missing emails, phones, socials and the website audit.</p>
+<section class="card">
+  <form method="post" action="/import" enctype="multipart/form-data">
+    <label>CSV file <input type="file" name="file" accept=".csv,text/csv" required></label>
+    <p class="muted small">Recognised columns (any order, case-insensitive): <code>name</code>/<code>company</code>, <code>website</code>/<code>url</code>,
+      <code>email</code>, <code>phone</code>/<code>mobile</code>, <code>address</code>, <code>city</code>, <code>country</code> (2-letter code), <code>category</code>.
+      Several emails or phones in one cell can be separated with <code>;</code>.</p>
+    <label>Add to campaign
+      <select name="campaign_id"><option value="0">+ New campaign</option>
+        {% for c in campaigns %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select>
+    </label>
+    <label>New campaign name <small>(if creating one)</small> <input name="name" placeholder="e.g. Clinics from trade show"></label>
+    <label>What you sell to them <small>(used in templates)</small> <input name="services" placeholder="e.g. patient booking app with WhatsApp reminders"></label>
+    <label class="check"><input type="checkbox" name="enrich" value="1" checked> Crawl websites to fill in contacts, tech &amp; audit</label>
+    <div class="actions"><button>Import</button></div>
+  </form>
+</section>
+{% endblock %}

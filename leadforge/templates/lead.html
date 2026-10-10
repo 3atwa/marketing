@@ -53,14 +53,45 @@
   </section>
 </div>
 
-<section class="card">
-  <h2>History</h2>
-  {% if not msgs %}<p class="muted">No contact yet.</p>{% endif %}
-  {% for m in msgs %}
-    <div class="msg"><span class="badge {{ m.status }}">{{ m.status }}</span> <strong>{{ m.channel }}</strong> {{ m.subject }} <small class="muted">{{ (m.sent_at or m.created_at)[:16].replace('T',' ') }}</small>
-      {% if m.error %}<div class="error">{{ m.error }}</div>{% endif %}</div>
-  {% endfor %}
-</section>
+<div class="two-col">
+  <section class="card">
+    <h2>Website audit {% if lead.audit.score is not none and lead.audit.score is defined %}<span class="score s{{ lead.audit.score // 25 }}">{{ lead.audit.score }}/100</span>{% endif %}</h2>
+    <p>Free report for this business: <a href="{{ report_link }}?preview=1" target="_blank" rel="noopener">{{ report_link }}</a>
+      <button class="secondary small-btn" onclick="navigator.clipboard.writeText('{{ report_link }}')">Copy link</button></p>
+    <p class="muted small">Put <code>{{ '{{report_link}}' }}</code> in a template to include it in emails. Opened {{ lead.report_views }} time{{ 's' if lead.report_views != 1 }}{% if lead.report_views %} 🔥{% endif %}.</p>
+    {% for c in lead.audit.checks or [] %}
+      <div class="check {{ 'ok' if c.ok else 'fail' }} compact"><span class="icon">{{ '✓' if c.ok else '✕' }}</span><div>{{ c.label }}{% if c.detail %} <small class="muted">({{ c.detail[:70] }})</small>{% endif %}</div></div>
+    {% else %}<p class="muted">{% if lead.audit.parked %}⚠ The domain is <strong>parked</strong>: there's no real website, a strong reason to reach out.{% elif lead.audit.incomplete %}{{ lead.audit.note }}{% else %}No website audit yet (no website, or it couldn't be reached).{% endif %}</p>{% endfor %}
+    {% if lead.tech %}<h3>Tech stack</h3><p>{% for t in lead.tech %}<span class="tag">{{ t }}</span>{% endfor %}</p>{% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Follow-up sequences</h2>
+    {% for e in enrollments %}
+      <div class="msg"><span class="badge {{ 'running' if e.status == 'active' else e.status }}">{{ e.status }}</span> {{ e.seq_name }}
+        <small class="muted">step {{ e.step }}{% if e.status == 'active' %}, next {{ e.next_at[:16].replace('T',' ') }} UTC{% endif %}{% if e.stop_reason %}: {{ e.stop_reason }}{% endif %}</small></div>
+    {% else %}<p class="muted">Not in a sequence.</p>{% endfor %}
+    <form method="post" action="/leads/{{ lead.id }}/enroll" class="actions" style="margin-top:.75rem">
+      <select name="sequence_id">{% for sq in seqs %}<option value="{{ sq.id }}">{{ sq.name }}</option>{% endfor %}</select>
+      <button class="secondary" {% if not lead.emails %}disabled title="No email"{% endif %}>Start</button>
+    </form>
+    {% if enrollments|selectattr('status', 'equalto', 'active')|list %}
+      <form method="post" action="/leads/{{ lead.id }}/stop-sequences"><button class="danger">Stop all sequences</button></form>
+    {% endif %}
+    {% if lead.email_status %}<p class="muted small">Email check: <strong>{{ lead.email_status }}</strong>{% if lead.email_status == 'invalid' %}: the domain doesn't accept mail{% endif %}</p>{% endif %}
+
+    <h2 style="margin-top:1.25rem">History</h2>
+    {% if not msgs and not events %}<p class="muted">No contact yet.</p>{% endif %}
+    {% for m in msgs %}
+      <div class="msg"><span class="badge {{ m.status }}">{{ m.status }}</span> <strong>{{ m.channel }}</strong> {{ m.subject }} <small class="muted">{{ (m.sent_at or m.created_at)[:16].replace('T',' ') }}</small>
+        {% if m.status == 'received' %}<blockquote>{{ m.body[:400] }}</blockquote>{% endif %}
+        {% if m.error %}<div class="error">{{ m.error }}</div>{% endif %}</div>
+    {% endfor %}
+    {% for e in events if e.kind in ['report_view', 'status', 'bounce'] %}
+      <div class="msg small"><span class="tag {{ 'hot' if e.kind == 'report_view' else '' }}">{{ e.kind.replace('_', ' ') }}</span> {% if e.kind != 'report_view' %}{{ e.detail }}{% endif %} <small class="muted">{{ e.created_at[:16].replace('T',' ') }}</small></div>
+    {% endfor %}
+  </section>
+</div>
 {% endblock %}
 {% block scripts %}
 <script>

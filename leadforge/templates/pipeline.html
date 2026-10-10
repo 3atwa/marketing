@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Pipeline · LeadForge{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Pipeline</h1><p class="muted">Drag a lead to another column to change its stage. Moving a lead to replied, interested, won, lost or do-not-contact stops its follow-ups.</p></div>
+  <form method="get"><select name="campaign" onchange="this.form.submit()">
+    <option value="0">All campaigns</option>
+    {% for c in campaigns %}<option value="{{ c.id }}" {% if c.id == campaign %}selected{% endif %}>{{ c.name }}</option>{% endfor %}
+  </select></form>
+</div>
+<div class="board">
+  {% for status, leads in columns.items() %}
+  <section class="column" data-status="{{ status }}">
+    <h3>{{ status.replace('_', ' ') }} <span class="muted">{{ leads|length }}</span></h3>
+    <div class="cards">
+      {% for l in leads[:200] %}
+      <a class="kcard" draggable="true" data-id="{{ l.id }}" href="/leads/{{ l.id }}">
+        <strong>{{ l.name }}</strong>
+        <small class="muted">{{ l.category }}{% if l.city %} · {{ l.city }}{% endif %}</small>
+        <span class="kmeta"><span class="score s{{ l.score // 25 }}">{{ l.score }}</span>
+          {% if l.emails %}✉{% endif %}{% if l.phones %} 📞{% endif %}{% if l.report_views %} <span class="tag hot">👀 viewed</span>{% endif %}</span>
+      </a>
+      {% endfor %}
+      {% if leads|length > 200 %}<p class="muted small">+{{ leads|length - 200 }} more</p>{% endif %}
+    </div>
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  let dragged = null;
+  document.querySelectorAll('.kcard').forEach(c => c.addEventListener('dragstart', () => { dragged = c; c.classList.add('dragging'); }));
+  document.querySelectorAll('.kcard').forEach(c => c.addEventListener('dragend', () => c.classList.remove('dragging')));
+  document.querySelectorAll('.column').forEach(col => {
+    col.addEventListener('dragover', e => { e.preventDefault(); col.classList.add('over'); });
+    col.addEventListener('dragleave', () => col.classList.remove('over'));
+    col.addEventListener('drop', async e => {
+      e.preventDefault(); col.classList.remove('over');
+      if (!dragged) return;
+      const r = await fetch(`/leads/${dragged.dataset.id}/status`, {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({status: col.dataset.status})});
+      if (r.ok) { col.querySelector('.cards').prepend(dragged); location.reload(); }
+    });
+  });
+</script>
+{% endblock %}

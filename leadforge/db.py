@@ -81,9 +81,71 @@ CREATE TABLE IF NOT EXISTS suppression (
     reason TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
+
+-- Follow-up sequences: ordered steps, each a template sent N days after the previous one.
+CREATE TABLE IF NOT EXISTS sequences (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    steps TEXT NOT NULL DEFAULT '[]',       -- json [{"template_id": 1, "delay_days": 0}, ...]
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS enrollments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+    sequence_id INTEGER NOT NULL REFERENCES sequences(id) ON DELETE CASCADE,
+    step INTEGER NOT NULL DEFAULT 0,        -- index of the next step to send
+    status TEXT NOT NULL DEFAULT 'active',  -- active|done|stopped
+    stop_reason TEXT NOT NULL DEFAULT '',
+    next_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (lead_id, sequence_id)
+);
+
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id INTEGER REFERENCES leads(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,                     -- report_view|reply|bounce|status|...
+    detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_events_lead ON events(lead_id);
+
+CREATE TABLE IF NOT EXISTS inbox_seen (
+    message_id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL
+);
 """
 
+# Columns added after the first release. init_db() adds any that are missing,
+# so existing databases upgrade in place.
+MIGRATIONS = {
+    "leads": {
+        "tech": "TEXT NOT NULL DEFAULT '[]'",
+        "audit": "TEXT NOT NULL DEFAULT '{}'",
+        "email_status": "TEXT NOT NULL DEFAULT ''",   # valid|invalid|unknown
+        "report_token": "TEXT",
+        "report_views": "INTEGER NOT NULL DEFAULT 0",
+        "last_activity_at": "TEXT",
+    },
+    "messages": {
+        "enrollment_id": "INTEGER",
+        "message_id": "TEXT NOT NULL DEFAULT ''",
+    },
+}
+
 DEFAULT_TEMPLATES = [
+    (
+        "Free website check (with report link)",
+        "I checked {{business_name}}'s website",
+        "Hi {{business_name}} team,\n\n"
+        "I was looking at {{category_plural}}{{ ' in ' + city if city else '' }} and ran a quick check of your online presence. "
+        "{{signal_line}}\n\n"
+        "I put the results on a 1-page report for you (free, no sign-up): {{report_link}}\n\n"
+        "We help {{category_plural}} fix exactly these things with {{services}}. "
+        "Happy to walk you through it in 15 minutes{{ ' - you can pick a time here: ' + calendar_url if calendar_url else '' }}.\n\n"
+        "Best,\n{{my_name}}\n{{my_company}}",
+    ),
     (
         "Intro - app for your business",
         "Quick idea for {{business_name}}",
@@ -100,6 +162,12 @@ DEFAULT_TEMPLATES = [
         "Hi again,\n\nJust floating this back to the top of your inbox. "
         "If {{services}} isn't a priority right now, no worries - just let me know and I won't follow up.\n\n"
         "Thanks,\n{{my_name}}",
+    ),
+    (
+        "Last check-in",
+        "Should I close your file, {{business_name}}?",
+        "Hi,\n\nI haven't heard back, so I'll assume the timing isn't right and won't email again. "
+        "If things change, your free report stays here: {{report_link}}\n\nAll the best,\n{{my_name}}",
     ),
 ]
 
@@ -133,14 +201,32 @@ def get_conn() -> Iterator[sqlite3.Connection]:
 def init_db() -> None:
     with get_conn() as conn:
         conn.executescript(SCHEMA)
+        for table, cols in MIGRATIONS.items():
+            have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            for col, ddl in cols.items():
+                if col not in have:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_report ON leads(report_token)")
         if conn.execute("SELECT COUNT(*) FROM templates").fetchone()[0] == 0:
             conn.executemany(
                 "INSERT INTO templates (name, subject, body, created_at) VALUES (?, ?, ?, ?)",
                 [(n, s, b, now()) for n, s, b in DEFAULT_TEMPLATES],
             )
+        if conn.execute("SELECT COUNT(*) FROM sequences").fetchone()[0] == 0:
+            ids = {r[1]: r[0] for r in conn.execute("SELECT id, name FROM templates")}
+            first = ids.get("Free website check (with report link)") or min(ids.values(), default=None)
+            steps = [{"template_id": first, "delay_days": 0}]
+            if ids.get("Short follow-up"):
+                steps.append({"template_id": ids["Short follow-up"], "delay_days": 3})
+            if ids.get("Last check-in"):
+                steps.append({"template_id": ids["Last check-in"], "delay_days": 7})
+            if first:
+                conn.execute("INSERT INTO sequences (name, steps, created_at) VALUES (?, ?, ?)",
+                             ("3-step: report, follow-up, last check-in", json.dumps(steps), now()))
 
 
-JSON_FIELDS = {"emails": list, "phones": list, "socials": dict, "signals": list, "sources": list}
+JSON_FIELDS = {"emails": list, "phones": list, "socials": dict, "signals": list, "sources": list,
+               "tech": list, "audit": dict, "steps": list}
 
 
 def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -252,13 +338,27 @@ def merge_lead(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
 
 
 def save_enrichment(lead_id: int, emails: list[str], phones: list[str], socials: dict,
-                    signals: list[str], address: str, score: int, name: str = "") -> None:
+                    signals: list[str], address: str, score: int, name: str = "",
+                    tech: list[str] | None = None, audit: dict | None = None, email_status: str = "") -> None:
     execute(
         "UPDATE leads SET emails=?, phones=?, socials=?, signals=?, address=CASE WHEN address='' THEN ? ELSE address END, "
-        "score=?, enriched_at=?, name=CASE WHEN ?<>'' THEN ? ELSE name END WHERE id=?",
+        "score=?, enriched_at=?, name=CASE WHEN ?<>'' THEN ? ELSE name END, tech=?, audit=?, email_status=? WHERE id=?",
         (json.dumps(emails), json.dumps(phones), json.dumps(socials), json.dumps(signals), address, score, now(),
-         name, name, lead_id),
+         name, name, json.dumps(tech or []), json.dumps(audit or {}), email_status, lead_id),
     )
+
+
+def save_lead_enrichment(lead: dict) -> None:
+    save_enrichment(lead["id"], lead["emails"], lead["phones"], lead["socials"], lead["signals"],
+                    lead.get("address", ""), lead["score"], lead.get("name", ""), lead.get("tech"),
+                    lead.get("audit"), lead.get("email_status", ""))
+
+
+def log_event(lead_id: int | None, kind: str, detail: str = "") -> None:
+    execute("INSERT INTO events (lead_id, kind, detail, created_at) VALUES (?, ?, ?, ?)",
+            (lead_id, kind, detail[:2000], now()))
+    if lead_id:
+        execute("UPDATE leads SET last_activity_at = ? WHERE id = ?", (now(), lead_id))
 
 
 def is_suppressed(email: str) -> bool:

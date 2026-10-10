@@ -34,7 +34,9 @@
     <span class="spacer"></span>
     <select name="template_id">{% for t in tpls %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}</select>
     <label class="check" title="Requires ANTHROPIC_API_KEY"><input type="checkbox" name="use_ai" value="1" {% if not settings.ai_enabled %}disabled{% endif %}> AI personalise</label>
-    <button name="action" value="draft">✉ Draft emails for selected</button>
+    <button name="action" value="draft">✉ Draft emails</button>
+    {% if seqs %}<select name="sequence_id">{% for sq in seqs %}<option value="{{ sq.id }}">{{ sq.name }}</option>{% endfor %}</select>
+    <button name="action" value="enroll" class="secondary" title="Send the sequence's emails automatically and stop on reply">⟳ Start sequence</button>{% endif %}
     <select name="bulk_action" onchange="if(this.value) this.form.requestSubmit ? this.form.requestSubmit() : this.form.submit()">
       <option value="">More actions…</option>
       <option value="enrich">Re-crawl websites</option>
@@ -52,12 +54,13 @@
     {% for l in leads %}
       <tr>
         <td><input type="checkbox" name="lead_ids" value="{{ l.id }}"></td>
-        <td><span class="score s{{ (l.score // 25) }}">{{ l.score }}</span></td>
+        <td><span class="score s{{ (l.score // 25) }}">{{ l.score }}</span>{% if l.report_views %}<br><span class="tag hot" title="Opened the audit report">👀 {{ l.report_views }}</span>{% endif %}</td>
         <td><a href="/leads/{{ l.id }}"><strong>{{ l.name }}</strong></a><br><small class="muted">{{ l.category }}{% if l.rating %} · ★ {{ l.rating }} ({{ l.review_count }}){% endif %}</small></td>
-        <td>{% for e in l.emails[:2] %}<a href="mailto:{{ e }}">{{ e }}</a><br>{% else %}<span class="muted">–</span>{% endfor %}</td>
+        <td>{% for e in l.emails[:2] %}<a href="mailto:{{ e }}">{{ e }}</a>{% if loop.first and l.email_status == 'invalid' %} <span class="tag bad" title="Domain doesn't accept email">✕ invalid</span>{% elif loop.first and l.email_status == 'valid' %} <span class="ok-dot" title="Domain accepts email">●</span>{% endif %}<br>{% else %}<span class="muted">–</span>{% endfor %}</td>
         <td>{% for p in l.phones[:2] %}<a class="nowrap" href="{{ tel_link(p) }}">{{ p }}</a>{% if whatsapp_link(p, '') %} <a href="{{ whatsapp_link(p, '') }}" target="_blank" title="WhatsApp">💬</a>{% endif %}<br>{% else %}<span class="muted">–</span>{% endfor %}</td>
         <td>{% if l.website %}<a href="{{ l.website }}" target="_blank" rel="noopener">{{ l.website.split('//')[-1][:30] }}</a><br>{% endif %}
-            {% for k, v in l.socials.items() %}<a href="{{ v }}" target="_blank" rel="noopener" class="tag">{{ k }}</a>{% endfor %}</td>
+            {% for k, v in l.socials.items() %}<a href="{{ v }}" target="_blank" rel="noopener" class="tag">{{ k }}</a>{% endfor %}
+            {% if l.tech %}<br><small class="muted">{{ l.tech[:3]|join(' · ') }}</small>{% endif %}</td>
         <td class="clip">{{ l.address or l.city }}</td>
         <td>{% for s in l.signals[:3] %}<span class="tag warn">{{ s }}</span>{% endfor %}</td>
         <td><span class="badge {{ l.status }}">{{ l.status }}</span></td>

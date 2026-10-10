@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Website check: {{ lead.name }}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="report-body">
+<main class="container narrow report">
+  <header class="report-head">
+    <p class="muted small">Free website &amp; online presence check{% if settings.sender_company %} by {{ settings.sender_company }}{% endif %}</p>
+    <h1>{{ lead.name }}</h1>
+    <p class="muted">{{ lead.category|capitalize }}{% if lead.city %} · {{ lead.city }}{% endif %}{% if lead.website %} · {{ lead.website.split('//')[-1].rstrip('/') }}{% endif %}</p>
+  </header>
+
+  {% if audit.parked %}
+  <section class="card">
+    <h2>⚠ Your website address shows a "parked domain" page</h2>
+    <p>When customers type <strong>{{ lead.website.split('//')[-1].rstrip('/') }}</strong> they see a placeholder page from the domain
+      registrar instead of {{ lead.name }}. That page can show ads (sometimes for competitors) and makes the business look closed.</p>
+    <p>The good news: you already own the address, so getting a real site with online booking live on it is quick.</p>
+  </section>
+  {% elif audit.incomplete %}
+  <section class="card">
+    <h2>We couldn't analyse your website automatically</h2>
+    <p class="muted">{{ audit.note }} We're happy to review it by hand and send you the results.</p>
+  </section>
+  {% elif checks %}
+  <section class="card score-card">
+    <div class="ring" style="--p: {{ audit.score }}">
+      <span>{{ audit.score }}</span><small>/100</small>
+    </div>
+    <div>
+      <h2>{% if audit.score >= 80 %}Great foundation{% elif audit.score >= 55 %}Good, with quick wins available{% else %}Big opportunities to win more customers{% endif %}</h2>
+      <p class="muted">{{ checks|selectattr('ok')|list|length }} of {{ checks|length }} checks passed.
+        {% if fails %}{{ fails|length }} improvement{{ 's' if fails|length != 1 }} could bring you more bookings and enquiries.{% endif %}</p>
+    </div>
+  </section>
+
+  {% if fails %}
+  <section class="card">
+    <h2>What to improve</h2>
+    {% for c in fails %}
+      <div class="check fail">
+        <span class="icon">✕</span>
+        <div><strong>{{ c.label }}</strong>{% if c.detail %}<br><small class="muted">{{ c.detail }}</small>{% endif %}
+          <p class="tip">{{ c.tip }}</p></div>
+      </div>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  <section class="card">
+    <h2>What's working</h2>
+    {% for c in checks if c.ok %}
+      <div class="check ok"><span class="icon">✓</span><div><strong>{{ c.label }}</strong>{% if c.detail %}<br><small class="muted">{{ c.detail }}</small>{% endif %}</div></div>
+    {% else %}<p class="muted">Nothing yet. That means lots of room to grow.</p>{% endfor %}
+  </section>
+
+  {% if lead.tech %}
+  <section class="card">
+    <h2>Tools detected on your site</h2>
+    <p>{% for t in lead.tech %}<span class="tag">{{ t }}</span>{% endfor %}</p>
+  </section>
+  {% endif %}
+  {% else %}
+  <section class="card">
+    <h2>We couldn't find a website for {{ lead.name }}</h2>
+    <p>Most customers search online before they visit, call or book. Without a website (or with one that's hard to find)
+      you're likely missing customers who choose a competitor they can book online.</p>
+  </section>
+  {% endif %}
+
+  <section class="card cta">
+    <h2>Want help fixing this?</h2>
+    {% if services %}<p>{{ settings.sender_company or 'We' }} help{{ 's' if settings.sender_company }} {{ (lead.category or 'business')|plural }} like yours with <strong>{{ services }}</strong>.</p>{% endif %}
+    <div class="actions wrap">
+      {% if settings.calendar_url %}<a class="button" href="{{ settings.calendar_url }}" target="_blank" rel="noopener">📅 Book a free 15-min call</a>{% endif %}
+      {% if wa_link %}<a class="button whatsapp" href="{{ wa_link }}" target="_blank" rel="noopener">💬 Chat on WhatsApp</a>{% endif %}
+      {% if settings.from_email %}<a class="button secondary" href="mailto:{{ settings.from_email }}?subject={{ ('Website report for ' ~ lead.name)|urlencode }}">✉ Reply by email</a>{% endif %}
+    </div>
+    <p class="muted small">{{ settings.from_name }}{% if settings.from_name and settings.sender_company %}, {% endif %}{{ settings.sender_company }}</p>
+  </section>
+  <p class="muted small center">This report was generated automatically from your public website{% if audit.url %} ({{ audit.url }}){% endif %}.</p>
+</main>
+</body>
+</html>

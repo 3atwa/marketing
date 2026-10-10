@@ -63,16 +63,32 @@ class Settings:
     smtp_user: str = field(default_factory=lambda: os.getenv("SMTP_USER", ""))
     smtp_password: str = field(default_factory=lambda: os.getenv("SMTP_PASSWORD", ""))
     smtp_use_ssl: bool = field(default_factory=lambda: _bool("SMTP_USE_SSL", False))
+    smtp_starttls: bool = field(default_factory=lambda: _bool("SMTP_STARTTLS", True))
     from_email: str = field(default_factory=lambda: os.getenv("FROM_EMAIL", ""))
     from_name: str = field(default_factory=lambda: os.getenv("FROM_NAME", ""))
     sender_company: str = field(default_factory=lambda: os.getenv("SENDER_COMPANY", ""))
     sender_address: str = field(default_factory=lambda: os.getenv("SENDER_POSTAL_ADDRESS", ""))
+    # Automation: follow-up sequences, auto-send, inbox reply/bounce detection, webhooks
+    automation_enabled: bool = field(default_factory=lambda: _bool("AUTOMATION_ENABLED", True))
+    auto_send: bool = field(default_factory=lambda: _bool("AUTO_SEND", True))
+    imap_host: str = field(default_factory=lambda: os.getenv("IMAP_HOST", ""))
+    imap_port: int = field(default_factory=lambda: _int("IMAP_PORT", 993))
+    imap_use_ssl: bool = field(default_factory=lambda: _bool("IMAP_USE_SSL", True))
+    imap_user: str = field(default_factory=lambda: os.getenv("IMAP_USER", "") or os.getenv("SMTP_USER", ""))
+    imap_password: str = field(default_factory=lambda: os.getenv("IMAP_PASSWORD", "") or os.getenv("SMTP_PASSWORD", ""))
+    webhook_url: str = field(default_factory=lambda: os.getenv("WEBHOOK_URL", ""))
+    calendar_url: str = field(default_factory=lambda: os.getenv("CALENDAR_URL", ""))
+    sender_whatsapp: str = field(default_factory=lambda: os.getenv("SENDER_WHATSAPP", ""))
     daily_send_limit: int = field(default_factory=lambda: _int("DAILY_SEND_LIMIT", 50))
     send_delay_seconds: int = field(default_factory=lambda: _int("SEND_DELAY_SECONDS", 20))
 
     @property
     def smtp_configured(self) -> bool:
         return bool(self.smtp_host and self.from_email)
+
+    @property
+    def imap_configured(self) -> bool:
+        return bool(self.imap_host and self.imap_user and self.imap_password)
 
     @property
     def ai_enabled(self) -> bool:

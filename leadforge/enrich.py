@@ -21,7 +21,9 @@ import httpx
 import phonenumbers
 from bs4 import BeautifulSoup
 
+from .audit import audit_site, detect_tech
 from .config import settings
+from .verify import email_status
 from .utils import domain_of, http_client, normalize_url
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,24}")
@@ -195,6 +197,21 @@ def detect_signals(pages: dict[str, str], final_url: str) -> list[str]:
     return signals
 
 
+JS_REDIRECT = re.compile(r"""(?:window\.|document\.)?location(?:\.href)?\s*=\s*["']([^"']+)["']""", re.I)
+META_REFRESH = re.compile(r"""<meta[^>]+http-equiv=["']?refresh["']?[^>]+content=["']?\d+\s*;\s*url=([^"'>]+)""", re.I)
+
+
+def client_redirect(html: str, base_url: str) -> str:
+    """URL a small page sends the browser to via JavaScript or <meta refresh>, if any."""
+    if len(html) > 5000:
+        return ""
+    m = META_REFRESH.search(html) or JS_REDIRECT.search(html)
+    if not m:
+        return ""
+    target = urljoin(base_url, m.group(1).strip())
+    return target if target.startswith("http") and target != base_url else ""
+
+
 def site_name(soup: BeautifulSoup) -> str:
     """Business name from og:site_name, schema.org name, or the page title."""
     from .sources.websearch import clean_title
@@ -243,7 +260,8 @@ class Crawler:
 
     async def crawl(self, website: str, region: str | None = None) -> dict:
         """Return {emails, phones, socials, address, signals, error}."""
-        result = {"emails": [], "phones": [], "socials": {}, "address": "", "signals": [], "site_name": "", "error": ""}
+        result = {"emails": [], "phones": [], "socials": {}, "address": "", "signals": [], "site_name": "",
+                  "tech": [], "audit": {}, "error": ""}
         url = normalize_url(website)
         if not url:
             result["error"] = "no website"
@@ -255,7 +273,14 @@ class Crawler:
             if home is None:
                 result["error"] = "website unreachable or blocked by robots.txt"
                 return result
+            # Tiny stub pages that redirect with JavaScript or <meta refresh>: follow once.
+            target = client_redirect(home.text, str(home.url))
+            if target:
+                followed = await self._get(client, target)
+                if followed is not None:
+                    home = followed
             final_url = str(home.url)
+            load_ms = int(home.elapsed.total_seconds() * 1000)
             site = domain_of(final_url)
             pages: dict[str, str] = {final_url: home.text}
 
@@ -299,6 +324,14 @@ class Crawler:
         result["socials"] = extract_socials("\n".join(pages.values()))
         result["address"] = address
         result["signals"] = detect_signals(pages, final_url)
+        if load_ms > 3000:
+            # Parallel crawling inflates timings; re-measure slow pages once before calling them slow.
+            async with http_client() as client:
+                retry = await self._get(client, final_url)
+            if retry is not None:
+                load_ms = min(load_ms, int(retry.elapsed.total_seconds() * 1000))
+        result["tech"] = detect_tech("\n".join(pages.values()))
+        result["audit"] = audit_site(pages, final_url, load_ms, result["socials"], result["tech"])
         return result
 
 
@@ -307,7 +340,7 @@ def score_lead(lead: dict) -> int:
     score = 0
     emails = lead.get("emails") or []
     site = domain_of(lead.get("website") or "")
-    if emails:
+    if emails and lead.get("email_status") != "invalid":
         score += 35
         if site and any(e.endswith("@" + site) for e in emails):
             score += 10
@@ -321,8 +354,10 @@ def score_lead(lead: dict) -> int:
     signals = lead.get("signals") or []
     if "No online booking/ordering found" in signals:
         score += 5
-    if any(s.startswith(("Website not mobile", "Website looks outdated", "No HTTPS")) for s in signals):
+    if any(s.startswith(("Website not mobile", "Website looks outdated", "No HTTPS", "Domain is parked")) for s in signals):
         score += 5
+    if lead.get("report_views"):
+        score += 15  # they opened the audit we sent: a warm lead
     return min(score, 100)
 
 
@@ -340,11 +375,16 @@ async def enrich_many(leads: list[dict], log=print) -> list[dict]:
                     found = await asyncio.wait_for(crawler.crawl(lead["website"], lead.get("country")), 90)
                 except Exception as exc:  # never let one site kill the batch
                     found = {"emails": [], "phones": [], "socials": {}, "address": "", "signals": [], "site_name": "",
-                             "error": str(exc)}
+                             "tech": [], "audit": {}, "error": str(exc)}
             lead["emails"] = list(dict.fromkeys([*(lead.get("emails") or []), *found["emails"]]))
             lead["phones"] = list(dict.fromkeys([*(lead.get("phones") or []), *found["phones"]]))
             lead["socials"] = {**found["socials"], **(lead.get("socials") or {})}
             lead["signals"] = found["signals"]
+            lead["tech"] = found["tech"]
+            lead["audit"] = found["audit"]
+            if lead["audit"].get("parked"):
+                lead["signals"] = ["Domain is parked (no working website)"] + [
+                    x for x in lead["signals"] if x.startswith("No HTTPS")]
             lead["address"] = lead.get("address") or found["address"]
             if found["site_name"] and (not lead.get("name") or (
                     lead.get("source") == "web" and not SEO_TITLE.search(found["site_name"]))):
@@ -352,6 +392,18 @@ async def enrich_many(leads: list[dict], log=print) -> list[dict]:
         else:
             lead["signals"] = ["No website"]
         lead["phones"] = normalize_phones(lead.get("phones") or [], lead.get("country"))
+        for check in (lead.get("audit") or {}).get("checks", []):
+            if check["key"] == "social" and lead.get("socials"):  # socials may come from the map listing too
+                check.update(ok=True, detail=", ".join(sorted(lead["socials"])), tip="")
+        if (lead.get("audit") or {}).get("checks"):
+            checks = lead["audit"]["checks"]
+            lead["audit"]["score"] = round(100 * sum(c["ok"] for c in checks) / len(checks))
+        if lead.get("emails"):
+            lead["email_status"] = await email_status(lead["emails"][0])
+            if lead["email_status"] == "invalid" and len(lead["emails"]) > 1:
+                # Move a dead address to the back so drafts use a working one.
+                lead["emails"] = lead["emails"][1:] + lead["emails"][:1]
+                lead["email_status"] = await email_status(lead["emails"][0])
         lead["score"] = score_lead(lead)
         done += 1
         if done % 10 == 0 or done == len(leads):

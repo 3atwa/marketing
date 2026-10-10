@@ -11,14 +11,15 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import ai, db, outreach, pipeline
+from . import ai, automation, db, outreach, pipeline
 from .config import settings
 from .sources import available_sources
+from .utils import pluralize
 
 BASE = Path(__file__).resolve().parent
 LEAD_STATUSES = ["new", "contacted", "replied", "interested", "won", "lost", "do_not_contact"]
@@ -29,20 +30,24 @@ async def lifespan(_: FastAPI):
     db.init_db()
     # Campaigns interrupted by a restart are marked failed so they can be re-run.
     db.execute("UPDATE campaigns SET status='failed', progress='Interrupted by restart' WHERE status='running'")
+    task = asyncio.create_task(automation.scheduler_loop()) if settings.automation_enabled else None
     yield
+    if task:
+        task.cancel()
 
 
 app = FastAPI(title="LeadForge", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
 templates = Jinja2Templates(directory=BASE / "templates")
 templates.env.filters["tojson_pretty"] = lambda v: json.dumps(v, indent=2)
+templates.env.filters["plural"] = pluralize
 templates.env.globals.update(
     whatsapp_link=outreach.whatsapp_link, tel_link=outreach.tel_link, mailto_link=outreach.mailto_link,
     settings=settings, LEAD_STATUSES=LEAD_STATUSES,
 )
 
 APP_PASSWORD = os.getenv("APP_PASSWORD", "")
-PUBLIC_PATHS = ("/unsubscribe", "/static", "/healthz")
+PUBLIC_PATHS = ("/unsubscribe", "/static", "/healthz", "/r/")
 
 
 @app.middleware("http")
@@ -91,8 +96,32 @@ def index(request: Request):
     sent = db.fetch_one("SELECT COUNT(*) AS n FROM messages WHERE status='sent'")["n"]
     return templates.TemplateResponse(request, "index.html", {
         "campaigns": campaigns, "totals": totals, "sent": sent, "sources": available_sources(),
-        "form": {}, "suggested": [],
+        "form": {}, "suggested": [], "funnel": funnel_stats(), "activity": recent_activity(),
     })
+
+
+def funnel_stats() -> dict:
+    row = db.fetch_one(
+        "SELECT COUNT(*) AS leads, "
+        "SUM(status != 'new') AS contacted, "
+        "SUM(report_views > 0) AS viewed, "
+        "SUM(status IN ('replied','interested','won')) AS replied, "
+        "SUM(status IN ('interested','won')) AS interested, "
+        "SUM(status = 'won') AS won FROM leads") or {}
+    sent = db.fetch_one("SELECT COUNT(*) AS n FROM messages WHERE channel='email' AND status='sent'")["n"]
+    received = db.fetch_one("SELECT COUNT(DISTINCT lead_id) AS n FROM messages WHERE status='received'")["n"]
+    bounced = db.fetch_one("SELECT COUNT(*) AS n FROM messages WHERE error='bounced'")["n"]
+    active = db.fetch_one("SELECT COUNT(*) AS n FROM enrollments WHERE status='active'")["n"]
+    stats = {k: (row.get(k) or 0) for k in ("leads", "contacted", "viewed", "replied", "interested", "won")}
+    stats.update(sent=sent, received=received, bounced=bounced, active_sequences=active,
+                 reply_rate=round(100 * received / sent) if sent else 0)
+    return stats
+
+
+def recent_activity(limit: int = 12) -> list[dict]:
+    return db.fetch_all(
+        "SELECT e.*, l.name AS lead_name FROM events e LEFT JOIN leads l ON l.id = e.lead_id "
+        "WHERE e.kind IN ('report_view','reply','bounce','status','email_sent') ORDER BY e.id DESC LIMIT ?", (limit,))
 
 
 @app.post("/suggest", response_class=HTMLResponse)
@@ -157,6 +186,7 @@ def campaign_detail(request: Request, cid: int):
     return templates.TemplateResponse(request, "campaign.html", {
         "camp": camp, "leads": leads, "params": params,
         "tpls": db.fetch_all("SELECT id, name FROM templates ORDER BY id"),
+        "seqs": db.fetch_all("SELECT id, name FROM sequences ORDER BY id"),
     })
 
 
@@ -212,11 +242,15 @@ async def campaign_bulk(request: Request, cid: int):
         camp = db.fetch_one("SELECT services FROM campaigns WHERE id = ?", (cid,))
         await outreach.create_drafts(ids, int(form.get("template_id") or 0), camp["services"], bool(form.get("use_ai")))
         return redirect("/outbox")
+    if action == "enroll":
+        res = automation.enroll(ids, int(form.get("sequence_id") or 0))
+        return redirect(f"/sequences?flash=Enrolled+{res['enrolled']}+leads+({res['skipped']}+skipped:+no+email,"
+                        f"+unsubscribed+or+already+enrolled)")
     if action == "enrich":
         asyncio.get_running_loop().create_task(pipeline.re_enrich(ids))
     elif action in LEAD_STATUSES:
         for i in ids:
-            db.execute("UPDATE leads SET status = ? WHERE id = ? AND campaign_id = ?", (action, i, cid))
+            automation.set_status(i, action, "bulk update")
     elif action == "delete":
         for i in ids:
             db.execute("DELETE FROM leads WHERE id = ? AND campaign_id = ?", (i, cid))
@@ -238,6 +272,11 @@ def lead_detail(request: Request, lid: int):
     msgs = db.fetch_all("SELECT * FROM messages WHERE lead_id = ? ORDER BY id DESC", (lid,))
     return templates.TemplateResponse(request, "lead.html", {
         "lead": lead, "camp": camp, "subject": subject, "body": body, "msgs": msgs,
+        "report_link": ctx["report_link"],
+        "events": db.fetch_all("SELECT * FROM events WHERE lead_id = ? ORDER BY id DESC LIMIT 30", (lid,)),
+        "enrollments": db.fetch_all("SELECT e.*, s.name AS seq_name FROM enrollments e JOIN sequences s "
+                                    "ON s.id = e.sequence_id WHERE e.lead_id = ? ORDER BY e.id DESC", (lid,)),
+        "seqs": db.fetch_all("SELECT id, name FROM sequences ORDER BY id"),
     })
 
 
@@ -250,11 +289,12 @@ async def lead_update(request: Request, lid: int):
     split = lambda s: [x.strip() for x in str(s).replace("\n", ",").split(",") if x.strip()]
     status = form.get("status") if form.get("status") in LEAD_STATUSES else lead["status"]
     db.execute(
-        "UPDATE leads SET name=?, website=?, emails=?, phones=?, address=?, status=?, notes=? WHERE id=?",
+        "UPDATE leads SET name=?, website=?, emails=?, phones=?, address=?, notes=? WHERE id=?",
         (form.get("name", lead["name"]), form.get("website", lead["website"]),
          json.dumps(split(form.get("emails", ""))), json.dumps(split(form.get("phones", ""))),
-         form.get("address", lead["address"]), status, form.get("notes", ""), lid),
+         form.get("address", lead["address"]), form.get("notes", ""), lid),
     )
+    automation.set_status(lid, status, "edited")
     if status == "do_not_contact":
         for e in split(form.get("emails", "")):
             db.suppress(e, "marked do-not-contact")
@@ -267,7 +307,137 @@ async def lead_log_contact(lid: int, channel: str = Form(...), body: str = Form(
     db.execute("INSERT INTO messages (lead_id, channel, body, status, created_at, sent_at) VALUES (?, ?, ?, 'sent', ?, ?)",
                (lid, channel, body, db.now(), db.now()))
     db.execute("UPDATE leads SET status='contacted' WHERE id=? AND status='new'", (lid,))
+    db.log_event(lid, f"{channel}_logged", body[:200])
     return redirect(f"/leads/{lid}")
+
+
+@app.post("/leads/{lid}/status")
+async def lead_status(request: Request, lid: int):
+    """Used by the pipeline board's drag and drop."""
+    data = await request.json()
+    if data.get("status") not in LEAD_STATUSES:
+        raise HTTPException(400, "bad status")
+    automation.set_status(lid, data["status"], "pipeline board")
+    return {"ok": True}
+
+
+@app.post("/leads/{lid}/enroll")
+def lead_enroll(lid: int, sequence_id: int = Form(...)):
+    automation.enroll([lid], sequence_id)
+    return redirect(f"/leads/{lid}")
+
+
+@app.post("/leads/{lid}/stop-sequences")
+def lead_stop_sequences(lid: int):
+    automation.stop_sequences(lid, "stopped manually")
+    return redirect(f"/leads/{lid}")
+
+
+# ------------------------------------------------------------------ public audit report
+
+@app.get("/r/{token}", response_class=HTMLResponse)
+def audit_report(request: Request, token: str):
+    lead = db.fetch_one("SELECT * FROM leads WHERE report_token = ?", (token,))
+    if not lead:
+        raise HTTPException(404)
+    camp = db.fetch_one("SELECT services FROM campaigns WHERE id = ?", (lead["campaign_id"],))
+    if request.query_params.get("preview") != "1":
+        automation.record_report_view(lead, request.headers.get("user-agent", ""))
+    audit = lead["audit"] or {}
+    checks = audit.get("checks", [])
+    wa_text = f"Hi, I saw the website report for {lead['name']} and I'd like to know more."
+    return templates.TemplateResponse(request, "report.html", {
+        "lead": lead, "audit": audit, "checks": checks, "fails": [c for c in checks if not c["ok"]],
+        "services": camp["services"] if camp else "",
+        "wa_link": outreach.whatsapp_link(settings.sender_whatsapp, wa_text) if settings.sender_whatsapp else "",
+    })
+
+
+# ------------------------------------------------------------------ pipeline board
+
+@app.get("/pipeline", response_class=HTMLResponse)
+def pipeline_board(request: Request, campaign: int = 0):
+    where, args = ("WHERE campaign_id = ?", [campaign]) if campaign else ("", [])
+    leads = db.fetch_all(f"SELECT id, name, category, city, score, status, report_views, emails, phones FROM leads "
+                         f"{where} ORDER BY score DESC LIMIT 2000", args)
+    columns = {s: [l for l in leads if l["status"] == s] for s in LEAD_STATUSES}
+    return templates.TemplateResponse(request, "pipeline.html", {
+        "columns": columns, "campaign": campaign,
+        "campaigns": db.fetch_all("SELECT id, name FROM campaigns ORDER BY id DESC"),
+    })
+
+
+# ------------------------------------------------------------------ sequences / automation
+
+@app.get("/sequences", response_class=HTMLResponse)
+def sequences_page(request: Request):
+    seqs = db.fetch_all("SELECT * FROM sequences ORDER BY id")
+    counts = {(r["sequence_id"], r["status"]): r["n"] for r in db.fetch_all(
+        "SELECT sequence_id, status, COUNT(*) AS n FROM enrollments GROUP BY sequence_id, status")}
+    for sq in seqs:
+        sq["counts"] = {st: counts.get((sq["id"], st), 0) for st in ("active", "done", "stopped")}
+    return templates.TemplateResponse(request, "sequences.html", {
+        "seqs": seqs, "tpls": db.fetch_all("SELECT id, name FROM templates ORDER BY id"),
+        "flash": request.query_params.get("flash", ""),
+        "due": db.fetch_one("SELECT COUNT(*) AS n FROM enrollments WHERE status='active' AND next_at <= ?",
+                            (automation._utc(),))["n"],
+    })
+
+
+@app.post("/sequences")
+async def sequence_save(request: Request):
+    form = await request.form()
+    sid = int(form.get("sid") or 0)
+    if form.get("action") == "delete" and sid:
+        db.execute("DELETE FROM sequences WHERE id = ?", (sid,))
+        return redirect("/sequences")
+    steps = []
+    for tid, delay in zip(form.getlist("template_id"), form.getlist("delay_days")):
+        if str(tid).isdigit():
+            steps.append({"template_id": int(tid), "delay_days": max(0, int(delay or 0))})
+    name = str(form.get("name") or "Sequence").strip()
+    if sid:
+        db.execute("UPDATE sequences SET name=?, steps=? WHERE id=?", (name, json.dumps(steps), sid))
+    elif steps:
+        db.execute("INSERT INTO sequences (name, steps, created_at) VALUES (?, ?, ?)", (name, json.dumps(steps), db.now()))
+    return redirect("/sequences")
+
+
+@app.post("/automation/run")
+async def automation_run():
+    res = await automation.tick()
+    msg = f"Automation ran: {res['queued']} follow-ups queued, {res['sent']} sent, {res['replies']} replies, {res['bounces']} bounces"
+    return redirect("/sequences?flash=" + msg.replace(" ", "+"))
+
+
+# ------------------------------------------------------------------ import
+
+@app.get("/import", response_class=HTMLResponse)
+def import_page(request: Request):
+    return templates.TemplateResponse(request, "import.html", {
+        "campaigns": db.fetch_all("SELECT id, name FROM campaigns ORDER BY id DESC"),
+    })
+
+
+@app.post("/import")
+async def import_csv(file: UploadFile = File(...), campaign_id: int = Form(0), name: str = Form(""),
+                     services: str = Form(""), enrich: str = Form("")):
+    raw = (await file.read()).decode("utf-8-sig", "replace")
+    try:
+        dialect = csv.Sniffer().sniff(raw[:4096], delimiters=",;\t")
+    except csv.Error:
+        dialect = csv.excel
+    rows = list(csv.DictReader(io.StringIO(raw), dialect=dialect))
+    if not rows:
+        raise HTTPException(400, "The file has no rows")
+    if not campaign_id:
+        campaign_id = db.create_campaign(name or f"Import: {file.filename}", services, "imported", "", ["import"], 0)
+        db.update_campaign(campaign_id, status="done", progress=f"Imported {len(rows)} rows")
+    count = pipeline.import_rows(campaign_id, rows)
+    db.append_log(campaign_id, f"Imported {count} leads from {file.filename}")
+    if enrich:
+        asyncio.get_running_loop().create_task(pipeline.enrich_campaign(campaign_id))
+    return redirect(f"/campaigns/{campaign_id}")
 
 
 # ------------------------------------------------------------------ outbox
@@ -370,6 +540,12 @@ async def unsubscribe(request: Request):
 
 
 # ------------------------------------------------------------------ JSON API
+
+@app.post("/settings/test-webhook")
+def test_webhook():
+    automation.fire_webhook("test", {"message": "LeadForge webhook works"})
+    return redirect("/settings")
+
 
 @app.get("/api/campaigns")
 def api_campaigns():

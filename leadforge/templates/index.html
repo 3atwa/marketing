@@ -10,6 +10,27 @@
 </section>
 {% endif %}
 
+{% if funnel %}
+<section class="card">
+  <h2>Outreach funnel</h2>
+  <div class="funnel">
+    {% set steps = [('Leads', funnel.leads), ('Contacted', funnel.contacted), ('Viewed report', funnel.viewed), ('Replied', funnel.replied), ('Interested', funnel.interested), ('Won', funnel.won)] %}
+    {% for label, n in steps %}
+      <div class="fstep"><div class="fbar" style="--w: {{ (100 * n / (funnel.leads or 1))|round(1) if funnel.leads else 0 }}%"></div><span>{{ label }}</span><strong>{{ n }}</strong></div>
+    {% endfor %}
+  </div>
+  <p class="muted small">{{ funnel.sent }} emails sent · reply rate {{ funnel.reply_rate }}% · {{ funnel.bounced }} bounced · {{ funnel.active_sequences }} leads in active sequences</p>
+  {% if activity %}
+  <h3>Recent activity</h3>
+  {% for e in activity %}
+    <div class="msg small"><span class="tag {{ 'hot' if e.kind in ['report_view','reply'] else '' }}">{{ {'report_view': '👀 viewed report', 'reply': '💬 replied', 'bounce': '✕ bounced', 'status': 'status', 'email_sent': '✉ sent'}.get(e.kind, e.kind) }}</span>
+      {% if e.lead_id %}<a href="/leads/{{ e.lead_id }}">{{ e.lead_name }}</a>{% endif %} <span class="muted">{% if e.kind in ['status','email_sent'] %}{{ e.detail[:60] }}{% endif %}</span>
+      <small class="muted">{{ e.created_at[:16].replace('T',' ') }}</small></div>
+  {% endfor %}
+  {% endif %}
+</section>
+{% endif %}
+
 <section class="card">
   <h2>New lead campaign</h2>
   <p class="muted">Describe what you sell, pick the kinds of businesses and where they are. LeadForge finds them, visits their websites and collects emails, phones, socials and addresses.</p>

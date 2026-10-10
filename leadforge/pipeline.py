@@ -69,8 +69,7 @@ async def run_campaign(campaign_id: int) -> None:
         log(f"Discovery done ({found} raw results, {len(pending)} unique new leads). Crawling websites...")
         await enrich_many(pending, log)
         for lead in pending:
-            db.save_enrichment(lead["id"], lead["emails"], lead["phones"], lead["socials"],
-                               lead["signals"], lead.get("address", ""), lead["score"], lead.get("name", ""))
+            db.save_lead_enrichment(lead)
 
         stats = db.fetch_one(
             "SELECT COUNT(*) AS total, SUM(emails != '[]') AS with_email, SUM(phones != '[]') AS with_phone "
@@ -97,5 +96,55 @@ async def re_enrich(lead_ids: list[int]) -> None:
     leads = [l for l in leads if l]
     await enrich_many(leads)
     for lead in leads:
-        db.save_enrichment(lead["id"], lead["emails"], lead["phones"], lead["socials"],
-                           lead["signals"], lead.get("address", ""), lead["score"], lead.get("name", ""))
+        db.save_lead_enrichment(lead)
+
+
+# Accepted header names for CSV import (case-insensitive).
+IMPORT_COLUMNS = {
+    "name": ("name", "business", "business name", "company", "company name", "title"),
+    "website": ("website", "url", "site", "web", "domain"),
+    "emails": ("email", "emails", "e-mail", "email address"),
+    "phones": ("phone", "phones", "telephone", "tel", "mobile", "phone number", "whatsapp"),
+    "address": ("address", "street", "full address"),
+    "city": ("city", "town"),
+    "country": ("country", "country code"),
+    "category": ("category", "type", "industry", "niche"),
+}
+
+
+def import_rows(campaign_id: int, rows: list[dict]) -> int:
+    """Insert rows from an uploaded CSV, mapping common header names."""
+    import re
+
+    count = 0
+    for row in rows:
+        lower = {str(k).strip().lower(): (v or "").strip() for k, v in row.items() if k}
+        lead: dict = {"source": "import"}
+        for field, names in IMPORT_COLUMNS.items():
+            value = next((lower[n] for n in names if lower.get(n)), "")
+            if field in ("emails", "phones"):
+                lead[field] = [x.strip() for x in re.split(r"[;,|]", value) if x.strip()]
+            else:
+                lead[field] = value
+        if lead["emails"]:
+            lead["emails"] = [e.lower() for e in lead["emails"] if "@" in e]
+        if len(lead["country"]) > 2:
+            lead["country"] = ""  # we only use ISO codes for phone parsing
+        if lead["website"] and not lead["website"].startswith("http"):
+            lead["website"] = "https://" + lead["website"]
+        if not (lead["name"] or lead["website"] or lead["emails"]):
+            continue
+        lead["name"] = lead["name"] or (lead["website"] or lead["emails"][0]).split("//")[-1].split("@")[-1]
+        lead["dedupe_key"] = dedupe_key(lead["name"], lead["website"], lead["address"])
+        db.upsert_lead(campaign_id, lead)
+        count += 1
+    return count
+
+
+async def enrich_campaign(campaign_id: int) -> None:
+    pending = db.fetch_all("SELECT * FROM leads WHERE campaign_id = ? AND enriched_at IS NULL", (campaign_id,))
+    db.append_log(campaign_id, f"Enriching {len(pending)} imported leads...")
+    await enrich_many(pending, lambda m: db.append_log(campaign_id, m))
+    for lead in pending:
+        db.save_lead_enrichment(lead)
+    db.append_log(campaign_id, "Enrichment done")

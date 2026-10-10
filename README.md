@@ -10,10 +10,30 @@ Tell LeadForge what you sell and where your customers are. It will:
 4. **Spot sales signals.** It flags things like *no online booking*, *not mobile-friendly*, *no HTTPS* or *outdated website* that make your pitch relevant.
 5. **Score and rank** every lead by how reachable and promising it is.
 6. **Help you reach out.** It drafts personalised emails from templates (optionally rewritten by AI for each business), sends them through your own SMTP with daily limits, and offers one-click WhatsApp, call and email-app links. It also tracks every lead through `new → contacted → replied → interested → won`.
+7. **Audit every website.** It builds a free one-page report for each business (score /100, what to fix, tools detected) that you can send them with `{{report_link}}`. You can see who opens it.
+8. **Follow up automatically.** Multi-step sequences (e.g. day 0 → 3 → 7) stop by themselves when a lead replies, bounces or unsubscribes. Replies and bounces are detected by reading your inbox.
+
+### Sales tools
+
+| Feature | What it does for you |
+|---|---|
+| **Free website audit report** (`/r/<token>`) | A branded page per lead with 12 checks (HTTPS, mobile, speed, online booking, WhatsApp/chat, analytics, SEO title and description, heading, socials, fresh content, Google business data). A "You could win more bookings" report gets far more replies than a generic pitch. **Parked domains** (no real website) are detected and explained. |
+| **Report view tracking** | When a human (not an email scanner bot) opens the report, the lead gets 👀, +15 score, an activity entry and a `report.viewed` webhook. Call them while they're interested. |
+| **Tech stack detection** | 40+ tools: WordPress, Wix, Shopify, Squarespace, Webflow, Elementor, Google Analytics/Tag Manager, Meta/TikTok Pixel, Calendly, Fresha, Booksy, OpenTable, Zocdoc, WhatsApp buttons, Intercom, Stripe… Pitch a booking app to sites without one, or an integration to sites that use a tool you support. |
+| **Email verification** | Checks every email's domain accepts mail (DNS MX via DNS-over-HTTPS). Dead addresses are flagged ✕ and never emailed, which protects your sender reputation. |
+| **Follow-up sequences** | Build sequences from your templates with day delays. A default 3-step sequence (report → follow-up → last check-in) is included. Follow-ups are threaded under your first email. |
+| **Reply & bounce detection (IMAP)** | Reads your inbox every 5 minutes. Replies set the lead to *replied*, stop its sequence and save the reply on the lead page. "Remove me / not interested" replies add the address to do-not-contact. Bounces mark the email invalid and suppress it. |
+| **Pipeline board** | Drag-and-drop Kanban (`/pipeline`) from *new* to *won*. Moving a lead to replied, interested, won, lost or do-not-contact stops its follow-ups. |
+| **Funnel dashboard** | Leads → contacted → viewed report → replied → interested → won, with reply rate, bounces and a live activity feed. |
+| **CSV import** | Upload your own lists. Columns are auto-mapped, duplicates merged, and each site is optionally crawled for contacts, tech and audit. |
+| **Webhooks** | `lead.replied`, `report.viewed` and `lead.status_changed` are POSTed to `WEBHOOK_URL`. Pipe them to Slack, a CRM, Google Sheets or WhatsApp alerts via Zapier, n8n or Make. |
 
 ![Dashboard](docs/1-dashboard.png)
 ![Campaign view](docs/2-campaign.png)
 ![Lead view](docs/3-lead.png)
+![Pipeline](docs/5-pipeline.png)
+
+<img src="docs/4-report-mobile.png" alt="Audit report a lead sees on their phone" width="320">
 
 ---
 
@@ -93,10 +113,14 @@ Everything is configured in `.env` (see [`.env.example`](.env.example)):
 | `DAILY_SEND_LIMIT`, `SEND_DELAY_SECONDS` | Keep volume low to protect your domain reputation (start with 20–50/day) |
 | `ANTHROPIC_API_KEY` | Enables AI target suggestions and per-lead email personalisation |
 | `GOOGLE_PLACES_API_KEY`, `GMAPS_SCRAPER_URL` | Extra lead sources |
+| `AUTOMATION_ENABLED`, `AUTO_SEND` | Background scheduler (every minute) for sequences and sending queued email |
+| `IMAP_HOST`, `IMAP_PORT`, `IMAP_USER`, `IMAP_PASSWORD` | Your inbox, for reply and bounce detection (user and password default to the SMTP ones) |
+| `CALENDAR_URL`, `SENDER_WHATSAPP` | "Book a call" and "Chat on WhatsApp" buttons on audit reports; `{{calendar_url}}` in templates |
+| `WEBHOOK_URL` | Receives JSON events for Zapier, n8n, Make, Slack… |
 
 ## Email templates
 
-Templates support these placeholders: `{{business_name}}`, `{{category}}`, `{{category_plural}}`, `{{city}}`, `{{website}}`, `{{rating}}`, `{{services}}`, `{{my_name}}`, `{{my_company}}`, plus `{{signal_line}}`. `{{signal_line}}` is a sentence based on what was found on the lead's website, e.g. *"I noticed customers can't book or order online on your website yet."* Jinja expressions work too.
+Templates support these placeholders: `{{business_name}}`, `{{category}}`, `{{category_plural}}`, `{{city}}`, `{{website}}`, `{{rating}}`, `{{services}}`, `{{my_name}}`, `{{my_company}}`, `{{report_link}}` (the lead's free audit report), `{{calendar_url}}` and `{{signal_line}}`. `{{signal_line}}` is a sentence based on what was found on the lead's website, e.g. *"I noticed customers can't book or order online on your website yet."* Jinja expressions work too.
 
 ## JSON API
 

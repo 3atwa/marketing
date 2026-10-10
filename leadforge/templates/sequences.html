@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Sequences · LeadForge{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Follow-up sequences</h1>
+    <p class="muted">A sequence sends a series of emails automatically, e.g. an intro on day 0, a follow-up 3 days later and a last check-in 7 days after that.
+      It stops by itself when the lead replies, unsubscribes, bounces or you move them to replied / interested / won / lost.</p>
+  </div>
+  <form method="post" action="/automation/run"><button class="secondary">▶ Run automation now</button></form>
+</div>
+{% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+
+<section class="card">
+  <h2>Automation status</h2>
+  <table>
+    <tr><td>Scheduler</td><td>{% if settings.automation_enabled %}<span class="badge done">on</span>: checks every minute{% else %}<span class="badge failed">off</span> (AUTOMATION_ENABLED=false){% endif %}</td></tr>
+    <tr><td>Auto-send queued emails</td><td>{% if settings.auto_send and settings.smtp_configured %}<span class="badge done">on</span>{% elif not settings.smtp_configured %}<span class="badge failed">needs SMTP</span>: follow-ups wait in the Outbox{% else %}<span class="badge failed">off</span>: send from the Outbox{% endif %}</td></tr>
+    <tr><td>Reply &amp; bounce detection</td><td>{% if settings.imap_configured %}<span class="badge done">on</span> ({{ settings.imap_host }}){% else %}<span class="badge failed">off</span>: set IMAP_HOST (+ IMAP_USER/PASSWORD, defaults to your SMTP login){% endif %}</td></tr>
+    <tr><td>Steps due right now</td><td>{{ due }}</td></tr>
+  </table>
+</section>
+
+{% for sq in seqs + [{'id': 0, 'name': '', 'steps': [], 'counts': {}}] %}
+<section class="card">
+  <h2>{{ sq.name or 'New sequence' }}</h2>
+  {% if sq.id %}<p class="muted">{{ sq.counts.active }} active · {{ sq.counts.done }} finished · {{ sq.counts.stopped }} stopped (replied, unsubscribed…)</p>{% endif %}
+  <form method="post" action="/sequences">
+    <input type="hidden" name="sid" value="{{ sq.id }}">
+    <label>Name <input name="name" value="{{ sq.name }}" placeholder="e.g. 3-step intro" required></label>
+    <table class="steps">
+      <thead><tr><th>#</th><th>Template</th><th>Send after (days)</th></tr></thead>
+      <tbody>
+      {% set rows = sq.steps + [{'template_id': '', 'delay_days': 3}] if sq.id else [{'template_id': '', 'delay_days': 0}, {'template_id': '', 'delay_days': 3}, {'template_id': '', 'delay_days': 7}] %}
+      {% for st in rows %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td><select name="template_id"><option value="">{% if loop.last and sq.id %}+ add a step…{% else %}(none){% endif %}</option>
+            {% for t in tpls %}<option value="{{ t.id }}" {% if t.id == st.template_id %}selected{% endif %}>{{ t.name }}</option>{% endfor %}</select></td>
+          <td><input type="number" name="delay_days" min="0" max="60" value="{{ st.delay_days }}" style="width:6em"></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p class="muted small">Step 1's delay counts from enrollment; each later delay counts from the previous step. Remove a step by setting it to "(none)".</p>
+    <div class="actions">
+      <button name="action" value="save">Save</button>
+      {% if sq.id %}<button name="action" value="delete" class="danger" formnovalidate onclick="return confirm('Delete sequence?')">Delete</button>{% endif %}
+    </div>
+  </form>
+</section>
+{% endfor %}
+<p class="muted">To start a sequence: open a campaign, select leads, and choose <strong>Start sequence</strong>.</p>
+{% endblock %}

@@ -26,6 +26,19 @@
 </section>
 
 <section class="card">
+  <h2>Automation &amp; integrations</h2>
+  <table>
+    <tr><td>Scheduler (sequences, auto-send, inbox)</td><td>{{ 'on' if settings.automation_enabled else 'off' }} · auto-send {{ 'on' if settings.auto_send else 'off' }}</td></tr>
+    <tr><td>Reply / bounce detection (IMAP)</td><td>{{ settings.imap_host or 'not configured (IMAP_HOST)' }}</td></tr>
+    <tr><td>Booking link in reports &amp; emails</td><td>{{ settings.calendar_url or 'not set (CALENDAR_URL)' }}</td></tr>
+    <tr><td>Your WhatsApp number on reports</td><td>{{ settings.sender_whatsapp or 'not set (SENDER_WHATSAPP)' }}</td></tr>
+    <tr><td>Webhook (Zapier / n8n / Make / Slack)</td><td>{{ settings.webhook_url or 'not set (WEBHOOK_URL)' }}
+      {% if settings.webhook_url %}<form method="post" action="/settings/test-webhook" style="display:inline"><button class="secondary small-btn">Send test</button></form>{% endif %}</td></tr>
+  </table>
+  <p class="muted small">Webhook events: <code>lead.replied</code>, <code>report.viewed</code>, <code>lead.status_changed</code>, <code>test</code>.</p>
+</section>
+
+<section class="card">
   <h2>Do-not-contact list</h2>
   <form method="post" action="/suppression" class="actions">
     <input name="email" type="email" placeholder="email@example.com" required>
