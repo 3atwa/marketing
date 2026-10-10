@@ -78,3 +78,4 @@ table.leads td { font-size: .9rem; }
   .grid-form, .two-col { grid-template-columns: 1fr; }
   .topbar { gap: 1rem; padding: .75rem 16px; flex-wrap: wrap; }
 }
+.nowrap { white-space: nowrap; }

@@ -32,7 +32,15 @@ OBFUSCATED_RE = re.compile(
 BAD_EMAIL_PARTS = (
     "example.", "domain.com", "yourdomain", "email.com", "sentry", "wixpress", "@2x", ".png", ".jpg",
     ".jpeg", ".gif", ".svg", ".webp", "godaddy", "localhost", "u003e", "noreply", "no-reply",
+    # placeholder addresses left in website themes
+    "@site.com", "@website.com", "@yoursite", "@mysite.", "@company.com", "@yourcompany", "@domain.", "@email.",
+    "@test.", "johndoe", "janedoe", "username@", "your@", "youremail", "yourname@",
 )
+# Inboxes that won't reach a decision maker; kept, but ranked last.
+BACKOFFICE_INBOXES = {
+    "privacy", "dataprotection", "gdpr", "dpo", "legal", "careers", "jobs", "recruitment", "hr", "abuse",
+    "webmaster", "postmaster", "accounts", "billing", "invoices", "press", "media", "complaints", "unsubscribe",
+}
 CONTACT_HINTS = re.compile(
     r"contact|kontakt|contacto|contato|contatti|about|impressum|imprint|legal|team|location|"
     r"visit|reach|get-in-touch|nous-joindre|a-propos|ueber-uns|uber-uns|chi-siamo|quienes-somos|"
@@ -54,6 +62,8 @@ BOOKING_HINTS = re.compile(
     r"online\s+booking|reserve\s+(?:now|a\s+table)",
     re.I,
 )
+# "Dentist in Austin, TX" is an SEO title, not a business name.
+SEO_TITLE = re.compile(r"\b(in|near)\s+[A-Z]|^(best|top)\b", re.I)
 APP_HINTS = re.compile(r"apps\.apple\.com|play\.google\.com/store/apps", re.I)
 CHAT_HINTS = re.compile(r"intercom|tawk\.to|crisp\.chat|drift\.com|livechat|zendesk|hubspot.*chat|tidio", re.I)
 ECOMMERCE_HINTS = re.compile(r"shopify|woocommerce|add[\s-]to[\s-]cart|checkout", re.I)
@@ -105,6 +115,21 @@ def extract_phones(text: str, tel_links: list[str], region: str | None) -> list[
         for raw in re.findall(r"\+\d[\d\s().\-]{7,18}\d", text):
             add(raw)
     return list(dict.fromkeys(out))[:5]
+
+
+def normalize_phones(phones: list[str], region: str | None) -> list[str]:
+    """Format numbers internationally (+971 4 320 3855) so tel:/WhatsApp links work."""
+    out = []
+    for raw in phones:
+        try:
+            num = phonenumbers.parse(raw, (region or "").upper() or None)
+            if phonenumbers.is_possible_number(num):
+                out.append(phonenumbers.format_number(num, phonenumbers.PhoneNumberFormat.INTERNATIONAL))
+                continue
+        except phonenumbers.NumberParseException:
+            pass
+        out.append(raw.strip())
+    return list(dict.fromkeys(out))
 
 
 def extract_socials(html: str) -> dict[str, str]:
@@ -170,6 +195,17 @@ def detect_signals(pages: dict[str, str], final_url: str) -> list[str]:
     return signals
 
 
+def site_name(soup: BeautifulSoup) -> str:
+    """Business name from og:site_name, schema.org name, or the page title."""
+    from .sources.websearch import clean_title
+
+    og = soup.find("meta", property="og:site_name")
+    if og and og.get("content", "").strip(" |-–—:·•»"):
+        return og["content"].strip(" |-–—:·•»")[:120]
+    title = soup.title.get_text(" ", strip=True) if soup.title else ""
+    return clean_title(title)
+
+
 class Crawler:
     def __init__(self) -> None:
         self._robots: dict[str, RobotFileParser | None] = {}
@@ -207,7 +243,7 @@ class Crawler:
 
     async def crawl(self, website: str, region: str | None = None) -> dict:
         """Return {emails, phones, socials, address, signals, error}."""
-        result = {"emails": [], "phones": [], "socials": {}, "address": "", "signals": [], "error": ""}
+        result = {"emails": [], "phones": [], "socials": {}, "address": "", "signals": [], "site_name": "", "error": ""}
         url = normalize_url(website)
         if not url:
             result["error"] = "no website"
@@ -224,6 +260,7 @@ class Crawler:
             pages: dict[str, str] = {final_url: home.text}
 
             soup = BeautifulSoup(home.text, "lxml")
+            result["site_name"] = site_name(soup)
             candidates = []
             for a in soup.find_all("a", href=True):
                 href = urljoin(final_url, a["href"])
@@ -255,7 +292,8 @@ class Crawler:
         all_text = "\n".join(texts)
         # Prefer emails on the business's own domain, then the rest.
         uniq = list(dict.fromkeys(e.lower() for e in emails if _valid_email(e)))
-        uniq.sort(key=lambda e: (not e.endswith("@" + site) and not e.endswith("." + site)))
+        uniq.sort(key=lambda e: (e.split("@")[0] in BACKOFFICE_INBOXES,
+                                 not e.endswith("@" + site) and not e.endswith("." + site)))
         result["emails"] = uniq[:5]
         result["phones"] = extract_phones(all_text, tel_links + phones, region)
         result["socials"] = extract_socials("\n".join(pages.values()))
@@ -301,14 +339,19 @@ async def enrich_many(leads: list[dict], log=print) -> list[dict]:
                 try:
                     found = await asyncio.wait_for(crawler.crawl(lead["website"], lead.get("country")), 90)
                 except Exception as exc:  # never let one site kill the batch
-                    found = {"emails": [], "phones": [], "socials": {}, "address": "", "signals": [], "error": str(exc)}
+                    found = {"emails": [], "phones": [], "socials": {}, "address": "", "signals": [], "site_name": "",
+                             "error": str(exc)}
             lead["emails"] = list(dict.fromkeys([*(lead.get("emails") or []), *found["emails"]]))
             lead["phones"] = list(dict.fromkeys([*(lead.get("phones") or []), *found["phones"]]))
             lead["socials"] = {**found["socials"], **(lead.get("socials") or {})}
             lead["signals"] = found["signals"]
             lead["address"] = lead.get("address") or found["address"]
+            if found["site_name"] and (not lead.get("name") or (
+                    lead.get("source") == "web" and not SEO_TITLE.search(found["site_name"]))):
+                lead["name"] = found["site_name"]  # a search-result title is a weaker name than the site's own
         else:
             lead["signals"] = ["No website"]
+        lead["phones"] = normalize_phones(lead.get("phones") or [], lead.get("country"))
         lead["score"] = score_lead(lead)
         done += 1
         if done % 10 == 0 or done == len(leads):

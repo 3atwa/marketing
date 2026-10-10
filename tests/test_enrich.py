@@ -29,6 +29,8 @@ def test_extract_emails_handles_mailto_text_and_obfuscation():
     assert "info@smileco.com" in emails
     assert "frontdesk@smileco.com" in emails
     assert not any("png" in e for e in emails)
+    assert extract_emails("", "info@site.com or johndoe@gmail.com") == []
+    assert extract_emails("", "john@smileco.com") == ["john@smileco.com"]
 
 
 def test_extract_jsonld():
@@ -75,3 +77,17 @@ def test_utils():
     assert dedupe_key("Smile Co", "https://www.smileco.com/") == "d:smileco.com"
     assert dedupe_key("Smile Co", "https://facebook.com/smile", "12 Main St") == "n:smile-co|12-main-st"
     assert pluralize("dentist") == "dentists" and pluralize("agency") == "agencies"
+
+
+def test_normalize_phones_and_listing_filters():
+    from leadforge.enrich import normalize_phones
+    from leadforge.sources.websearch import clean_title, looks_like_listing
+
+    assert normalize_phones(["043203855", "+1 512 555 0199"], "AE") == ["+971 4 320 3855", "+1 512-555-0199"]
+    assert looks_like_listing("https://salonsindubai.ae/", "Salons In Dubai", "hair salon")
+    assert looks_like_listing("https://www.yellow.com.mt/dentists/malta/valletta/", "Dentists", "dentist")
+    assert looks_like_listing("https://www.whatclinic.com/dentists/malta/valletta/x", "Drs Demajo", "dentist")
+    assert not looks_like_listing("https://www.zerafadental.com/", "Zerafa Dental Studio: Home", "dentist")
+    assert not looks_like_listing("https://bestsmile.com/", "Best Smile Dental", "dentist")
+    assert clean_title("Home | St Pauls Dental & Implantology") == "St Pauls Dental & Implantology"
+    assert clean_title("Zerafa Dental Studio: Home") == "Zerafa Dental Studio"

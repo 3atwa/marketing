@@ -252,11 +252,12 @@ def merge_lead(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
 
 
 def save_enrichment(lead_id: int, emails: list[str], phones: list[str], socials: dict,
-                    signals: list[str], address: str, score: int) -> None:
+                    signals: list[str], address: str, score: int, name: str = "") -> None:
     execute(
         "UPDATE leads SET emails=?, phones=?, socials=?, signals=?, address=CASE WHEN address='' THEN ? ELSE address END, "
-        "score=?, enriched_at=? WHERE id=?",
-        (json.dumps(emails), json.dumps(phones), json.dumps(socials), json.dumps(signals), address, score, now(), lead_id),
+        "score=?, enriched_at=?, name=CASE WHEN ?<>'' THEN ? ELSE name END WHERE id=?",
+        (json.dumps(emails), json.dumps(phones), json.dumps(socials), json.dumps(signals), address, score, now(),
+         name, name, lead_id),
     )
 
 

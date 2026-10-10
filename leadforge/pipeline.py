@@ -6,7 +6,7 @@ import traceback
 
 from . import db
 from .enrich import enrich_many
-from .sources import SOURCES
+from .sources import SOURCES, osm
 from .utils import dedupe_key, is_directory
 
 _running: dict[int, asyncio.Task] = {}
@@ -16,6 +16,15 @@ def split_list(text: str) -> list[str]:
     import re
 
     return [p.strip() for p in re.split(r"[,\n;]+", text or "") if p.strip()]
+
+
+async def location_country(location: str) -> str:
+    """ISO country code for a location, so local phone numbers can be parsed."""
+    try:
+        place = await osm.geocode(location)
+    except Exception:
+        return ""
+    return ((place or {}).get("address", {}).get("country_code") or "").upper()
 
 
 async def run_campaign(campaign_id: int) -> None:
@@ -36,6 +45,7 @@ async def run_campaign(campaign_id: int) -> None:
 
         found = 0
         for location in locations:
+            country = await location_country(location)
             for target in targets:
                 for src in sources:
                     log(f"Searching {src}: '{target}' in '{location}'")
@@ -45,6 +55,7 @@ async def run_campaign(campaign_id: int) -> None:
                         log(f"{src} failed: {exc}")
                         continue
                     for lead in raw:
+                        lead["country"] = lead.get("country") or country
                         if lead.get("website") and is_directory(lead["website"]):
                             lead["website"] = ""
                         lead["dedupe_key"] = dedupe_key(lead.get("name", ""), lead.get("website", ""), lead.get("address", ""))
@@ -59,7 +70,7 @@ async def run_campaign(campaign_id: int) -> None:
         await enrich_many(pending, log)
         for lead in pending:
             db.save_enrichment(lead["id"], lead["emails"], lead["phones"], lead["socials"],
-                               lead["signals"], lead.get("address", ""), lead["score"])
+                               lead["signals"], lead.get("address", ""), lead["score"], lead.get("name", ""))
 
         stats = db.fetch_one(
             "SELECT COUNT(*) AS total, SUM(emails != '[]') AS with_email, SUM(phones != '[]') AS with_phone "
@@ -87,4 +98,4 @@ async def re_enrich(lead_ids: list[int]) -> None:
     await enrich_many(leads)
     for lead in leads:
         db.save_enrichment(lead["id"], lead["emails"], lead["phones"], lead["socials"],
-                           lead["signals"], lead.get("address", ""), lead["score"])
+                           lead["signals"], lead.get("address", ""), lead["score"], lead.get("name", ""))

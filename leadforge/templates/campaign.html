@@ -55,7 +55,7 @@
         <td><span class="score s{{ (l.score // 25) }}">{{ l.score }}</span></td>
         <td><a href="/leads/{{ l.id }}"><strong>{{ l.name }}</strong></a><br><small class="muted">{{ l.category }}{% if l.rating %} · ★ {{ l.rating }} ({{ l.review_count }}){% endif %}</small></td>
         <td>{% for e in l.emails[:2] %}<a href="mailto:{{ e }}">{{ e }}</a><br>{% else %}<span class="muted">–</span>{% endfor %}</td>
-        <td>{% for p in l.phones[:2] %}<a href="{{ tel_link(p) }}">{{ p }}</a>{% if whatsapp_link(p, '') %} <a href="{{ whatsapp_link(p, '') }}" target="_blank" title="WhatsApp">💬</a>{% endif %}<br>{% else %}<span class="muted">–</span>{% endfor %}</td>
+        <td>{% for p in l.phones[:2] %}<a class="nowrap" href="{{ tel_link(p) }}">{{ p }}</a>{% if whatsapp_link(p, '') %} <a href="{{ whatsapp_link(p, '') }}" target="_blank" title="WhatsApp">💬</a>{% endif %}<br>{% else %}<span class="muted">–</span>{% endfor %}</td>
         <td>{% if l.website %}<a href="{{ l.website }}" target="_blank" rel="noopener">{{ l.website.split('//')[-1][:30] }}</a><br>{% endif %}
             {% for k, v in l.socials.items() %}<a href="{{ v }}" target="_blank" rel="noopener" class="tag">{{ k }}</a>{% endfor %}</td>
         <td class="clip">{{ l.address or l.city }}</td>

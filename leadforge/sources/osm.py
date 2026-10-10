@@ -6,7 +6,10 @@ Usage policy: https://operations.osmfoundation.org/policies/nominatim/
 """
 from __future__ import annotations
 
+import asyncio
 import re
+
+import httpx
 
 from ..config import settings
 from ..utils import http_client
@@ -76,7 +79,14 @@ TAG_MAP: dict[str, list[str]] = {
     "laundry": ['["shop"="laundry"]', '["shop"="dry_cleaning"]'],
 }
 
-BUSINESS_KEYS = "^(shop|amenity|office|craft|healthcare|leisure|tourism)$"
+OVERPASS_MIRRORS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+]
+
+BUSINESS_KEYS ="^(shop|amenity|office|craft|healthcare|leisure|tourism)$"
 
 
 def _filters_for(target: str) -> list[str]:
@@ -95,13 +105,25 @@ def _filters_for(target: str) -> list[str]:
 
 async def geocode(location: str) -> dict | None:
     async with http_client() as client:
-        r = await client.get(
-            f"{settings.nominatim_url}/search",
-            params={"q": location, "format": "jsonv2", "limit": 1, "addressdetails": 1},
-        )
-        r.raise_for_status()
-        data = r.json()
-    return data[0] if data else None
+        for attempt in range(3):
+            try:
+                r = await client.get(
+                    f"{settings.nominatim_url}/search",
+                    params={"q": location, "format": "jsonv2", "limit": 1, "addressdetails": 1},
+                )
+                r.raise_for_status()
+                data = r.json()
+                return data[0] if data else None
+            except (httpx.HTTPError, ValueError):
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(2 * (attempt + 1))
+    return None
+
+
+def _bbox_clause(place: dict) -> tuple[str, str]:
+    s, n, w, e = place["boundingbox"]
+    return "", f"({s},{w},{n},{e})"
 
 
 def _area_clause(place: dict) -> tuple[str, str]:
@@ -124,19 +146,49 @@ def _address(tags: dict) -> str:
     return ", ".join(p for p in parts if p) or tags.get("addr:full", "")
 
 
+def overpass_endpoints() -> list[str]:
+    """Configured server first, then public mirrors (they are often overloaded)."""
+    return list(dict.fromkeys([settings.overpass_url, *OVERPASS_MIRRORS]))
+
+
+async def run_overpass(query: str, log=print, rounds: int = 3) -> list[dict]:
+    """POST a query, rotating through mirrors with backoff until one answers."""
+    last_error = ""
+    async with http_client() as client:
+        for attempt in range(rounds):
+            for url in overpass_endpoints():
+                try:
+                    r = await client.post(url, data={"data": query}, timeout=120)
+                    if r.status_code == 200:
+                        data = r.json()
+                        # Overpass reports query timeouts as a 200 with a "remark".
+                        if "elements" in data and not (data.get("remark") or "").startswith("runtime error"):
+                            return data["elements"]
+                        last_error = data.get("remark", "bad response")
+                    else:
+                        last_error = f"HTTP {r.status_code}"
+                except (httpx.HTTPError, ValueError) as exc:
+                    last_error = f"{type(exc).__name__} {exc}".strip()
+                log(f"OSM: {url.split('/')[2]} failed ({last_error}), trying next server")
+            await asyncio.sleep(5 * (attempt + 1))
+    raise RuntimeError(f"all Overpass servers failed: {last_error}")
+
+
 async def search(target: str, location: str, limit: int = 40, log=print) -> list[dict]:
     place = await geocode(location)
     if not place:
         log(f"OSM: could not geocode '{location}'")
         return []
-    preamble, area = _area_clause(place)
-    body = "".join(f"nwr{f}{area};" for f in _filters_for(target))
-    query = f"[out:json][timeout:90];{preamble}({body});out center tags {max(limit * 3, 50)};"
+    def build(clause: tuple[str, str]) -> str:
+        preamble, area = clause
+        body = "".join(f"nwr{f}{area};" for f in _filters_for(target))
+        return f"[out:json][timeout:90];{preamble}({body});out center tags {max(limit * 3, 50)};"
 
-    async with http_client() as client:
-        r = await client.post(settings.overpass_url, data={"data": query}, timeout=120)
-        r.raise_for_status()
-        elements = r.json().get("elements", [])
+    area_clause = _area_clause(place)
+    elements = await run_overpass(build(area_clause), log)
+    if not elements and area_clause[0]:
+        # Some mirrors have no area index and silently return nothing; retry with the bounding box.
+        elements = await run_overpass(build(_bbox_clause(place)), log)
 
     addr = place.get("address", {})
     city = addr.get("city") or addr.get("town") or addr.get("village") or location.split(",")[0].strip()
